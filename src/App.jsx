@@ -1,6 +1,10 @@
-import { supabase } from './lib/supabaseClient';
+// ✅ SINGLE TIME ALL IMPORTS (NO DUPLICATE)
 import React, { useState, useEffect } from 'react';
-import { Trophy, Home, Wallet, User, Shield, Flame, Clock, Users, Plus, ChevronRight, Star } from 'lucide-react';
+import { 
+  Flame, Mail, Lock, Loader, LogIn, UserPlus, LogOut,
+  Trophy, Home, Wallet, User, Shield, Clock, Users, Plus, ChevronRight, Star 
+} from 'lucide-react';
+import supabase from './lib/supabaseClient';
 import './App.css';
 
 // Mock Data
@@ -52,19 +56,114 @@ const LEADERBOARD = [
 ];
 
 function LoginScreen() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+    setLoading(false);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    window.location.reload();
+  };
+
+  const handleSignup = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password
+    });
+
+    if (error) {
+      setLoading(false);
+      alert(error.message);
+      return;
+    }
+
+    if (data.user) {
+      await supabase.from('profiles').insert([
+        {
+          id: data.user.id,
+          username: email.split('@')[0],
+          level: 1,
+          wins: 0,
+          total_played: 0,
+          role: 'user',
+          balance: 0 // ✅ auto 0 balance for new users
+        }
+      ]);
+    }
+
+    setLoading(false);
+    alert("✅ Signup successful! Now you can login.");
+  };
+
   return (
-    <div className="view login-view" style={{ padding: '20px', textAlign: 'center' }}>
-      <h2>Login to ClashArena</h2>
-      <p>Please log in to continue</p>
-      <button 
-        className="join-btn" 
-        onClick={() => supabase.auth.signInWithOAuth({ provider: 'google' })}
-        style={{ marginTop: '20px' }}
-      >
-        Sign in with Google
-      </button>
-      <div style={{ marginTop: '20px', fontSize: '0.8rem', color: '#666' }}>
-        Note: Supabase Auth is required.
+    <div className="app-container">
+      <div className="mobile-frame">
+        <div className="login-page">
+          <div className="login-brand">
+            <Flame className="brand-icon" size={36} />
+            <h1>CLASH<span className="brand-highlight">ARENA</span></h1>
+            <p>Play Free Fire Tournaments & Win Real Cash</p>
+          </div>
+
+          <div className="login-card">
+            <div className="input-group">
+              <Mail size={18} className="input-icon" />
+              <input
+                type="email"
+                placeholder="Enter your Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="form-input"
+              />
+            </div>
+
+            <div className="input-group">
+              <Lock size={18} className="input-icon" />
+              <input
+                type="password"
+                placeholder="Enter your Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="form-input"
+              />
+            </div>
+
+            <button
+              onClick={handleLogin}
+              disabled={loading}
+              className="btn btn-primary w-full"
+            >
+              {loading ? <Loader size={18} className="spin" /> : <LogIn size={18} />}
+              {loading ? "Logging In..." : "Login"}
+            </button>
+
+            <button
+              onClick={handleSignup}
+              disabled={loading}
+              className="btn btn-outline w-full"
+            >
+              {loading ? <Loader size={18} className="spin" /> : <UserPlus size={18} />}
+              Create New Account
+            </button>
+
+            <p className="login-note">
+              By creating account you agree to our Terms & Privacy Policy
+            </p>
+          </div>
+
+        </div>
       </div>
     </div>
   );
@@ -73,6 +172,7 @@ function LoginScreen() {
 export default function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [userProfile, setUserProfile] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -90,16 +190,37 @@ export default function App() {
       listener.subscription.unsubscribe();
     };
   }, []);
-  const [currentView, setCurrentView] = useState('home');
-  const [balance, setBalance] = useState(1250);
-  const [selectedTournament, setSelectedTournament] = useState(null);
-  const [user, setUser] = useState({ name: "Player_One", level: 42, avatar: "https://i.pravatar.cc/150?img=11" });
 
-  if (authLoading) return null;
+  // ✅ Jab session mile to profile data fetch karo
+  useEffect(() => {
+    if(!session) return;
+    const getProfile = async () => {
+      const {data} = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+      setUserProfile(data);
+    }
+    getProfile();
+  }, [session])
+
+  const [currentView, setCurrentView] = useState('home');
+  const [selectedTournament, setSelectedTournament] = useState(null);
+  // ✅ Ab balance bhi supabase se aayega hardcoded nahi rahega
+  const balance = userProfile?.balance || 0;
+  const user = {
+    name: userProfile?.username || session?.user.email,
+    level: userProfile?.level || 1,
+    avatar: `https://i.pravatar.cc/150?u=${session?.user.id}`
+  }
+
+  if (authLoading) return (
+    <div className="loading-screen">
+      <Loader size={48} className="spin" />
+    </div>
+  );
 
   if (!session) {
     return <LoginScreen />;
   }
+
   const renderContent = () => {
     switch(currentView) {
       case 'home':
@@ -401,6 +522,14 @@ function ProfileView({ user }) {
           <Shield size={20} />
           <span>Support</span>
           <ChevronRight size={16} />
+        </button>
+        <button className="menu-item" onClick={async () => {
+          await supabase.auth.signOut();
+          window.location.reload();
+        }} style={{color: '#ef4444'}}>
+        <LogOut size={20} />
+        <span>Logout</span>
+        <ChevronRight size={16} />
         </button>
       </div>
     </div>

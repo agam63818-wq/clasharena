@@ -1,3 +1,4 @@
+import { supabase } from './lib/supabaseClient';
 import React, { useState, useEffect } from 'react';
 import { Trophy, Home, Wallet, User, Shield, Flame, Clock, Users, Plus, ChevronRight, Star } from 'lucide-react';
 import './App.css';
@@ -50,12 +51,55 @@ const LEADERBOARD = [
   { rank: 5, name: "Elite_Slayer", wins: 12, earnings: 5400 }
 ];
 
+function LoginScreen() {
+  return (
+    <div className="view login-view" style={{ padding: '20px', textAlign: 'center' }}>
+      <h2>Login to ClashArena</h2>
+      <p>Please log in to continue</p>
+      <button 
+        className="join-btn" 
+        onClick={() => supabase.auth.signInWithOAuth({ provider: 'google' })}
+        style={{ marginTop: '20px' }}
+      >
+        Sign in with Google
+      </button>
+      <div style={{ marginTop: '20px', fontSize: '0.8rem', color: '#666' }}>
+        Note: Supabase Auth is required.
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setSession(session);
+      }
+    );
+
+    return () => {
+      listener.subscription.unsubscribe();
+    };
+  }, []);
   const [currentView, setCurrentView] = useState('home');
   const [balance, setBalance] = useState(1250);
   const [selectedTournament, setSelectedTournament] = useState(null);
   const [user, setUser] = useState({ name: "Player_One", level: 42, avatar: "https://i.pravatar.cc/150?img=11" });
 
+  if (authLoading) return null;
+
+  if (!session) {
+    return <LoginScreen />;
+  }
   const renderContent = () => {
     switch(currentView) {
       case 'home':

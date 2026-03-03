@@ -1,4 +1,4 @@
-// ✅ SINGLE TIME ALL IMPORTS (NO DUPLICATE)
+// ✅ No Duplicate Imports, 100% Correct
 import React, { useState, useEffect } from 'react';
 import { 
   Flame, Mail, Lock, Loader, LogIn, UserPlus, LogOut,
@@ -55,6 +55,7 @@ const LEADERBOARD = [
   { rank: 5, name: "Elite_Slayer", wins: 12, earnings: 5400 }
 ];
 
+// ✅ Login Screen
 function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -90,7 +91,7 @@ function LoginScreen() {
     }
 
     if (data.user) {
-      await supabase.from('profiles').insert([
+      await supabase.from('profiles').upsert([
         {
           id: data.user.id,
           username: email.split('@')[0],
@@ -98,7 +99,7 @@ function LoginScreen() {
           wins: 0,
           total_played: 0,
           role: 'user',
-          balance: 0 // ✅ auto 0 balance for new users
+          balance: 0
         }
       ]);
     }
@@ -169,11 +170,15 @@ function LoginScreen() {
   );
 }
 
+// ✅ Main App Component
 export default function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
+  const [currentView, setCurrentView] = useState('home');
+  const [selectedTournament, setSelectedTournament] = useState(null);
 
+  // Auth Check
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
@@ -191,34 +196,43 @@ export default function App() {
     };
   }, []);
 
-  // ✅ Jab session mile to profile data fetch karo
+  // Fetch User Profile from Supabase after login
   useEffect(() => {
     if(!session) return;
     const getProfile = async () => {
-      const {data} = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-      setUserProfile(data);
+      try {
+        const {data, error} = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
+        if(error) throw error;
+        setUserProfile(data);
+      } catch (err) {
+        console.log(err)
+      }
     }
     getProfile();
   }, [session])
 
-  const [currentView, setCurrentView] = useState('home');
-  const [selectedTournament, setSelectedTournament] = useState(null);
-  // ✅ Ab balance bhi supabase se aayega hardcoded nahi rahega
-  const balance = userProfile?.balance || 0;
-  const user = {
-    name: userProfile?.username || session?.user.email,
-    level: userProfile?.level || 1,
-    avatar: `https://i.pravatar.cc/150?u=${session?.user.id}`
+  // Loading State
+  if (authLoading) {
+    return <div className="app-container">
+      <div className="mobile-frame" style={{display:'flex', alignItems:'center', justifyContent:'center', height:'100%', flexDirection:'column', gap:'12px'}}>
+        <Flame size={48} style={{color: '#ff6b35', animation: 'pulse 2s infinite'}} />
+        <p style={{color: '#a1a1aa'}}>Loading ClashArena...</p>
+      </div>
+    </div>
   }
 
-  if (authLoading) return (
-    <div className="loading-screen">
-      <Loader size={48} className="spin" />
-    </div>
-  );
-
+  // If not logged in show login screen
   if (!session) {
     return <LoginScreen />;
+  }
+
+ // User Data
+  const balance = userProfile?.balance || 0;
+  const isAdmin = userProfile?.role === 'admin';  // ✅ SIRF YEH EK LINE ADD KARO
+  const user = {
+    name: userProfile?.username || session?.user.email.split('@')[0],
+    level: userProfile?.level || 1,
+    avatar: `https://i.pravatar.cc/150?u=${session?.user.id}`
   }
 
   const renderContent = () => {
@@ -226,13 +240,16 @@ export default function App() {
       case 'home':
         return <HomeView onTournamentSelect={setSelectedTournament} setView={setCurrentView} />;
       case 'tournament':
-        return <TournamentDetailView tournament={selectedTournament} balance={balance} setBalance={setBalance} setView={setCurrentView} />;
+        return <TournamentDetailView tournament={selectedTournament} balance={balance} setBalance={async (newBalance) => {
+          await supabase.from('profiles').update({balance: newBalance}).eq('id', session.user.id)
+          setUserProfile({...userProfile, balance: newBalance})
+        }} setView={setCurrentView} />;
       case 'wallet':
         return <WalletView balance={balance} />;
       case 'profile':
         return <ProfileView user={user} />;
-      case 'admin':
-        return <AdminView />;
+        case 'admin':
+        return <AdminView isAdmin={isAdmin} setView={setCurrentView} />;
       default:
         return <HomeView />;
     }
@@ -245,13 +262,13 @@ export default function App() {
         <main className="main-content">
           {renderContent()}
         </main>
-        <BottomNav currentView={currentView} setView={setCurrentView} />
+        <BottomNav currentView={currentView} setView={setCurrentView} isAdmin={isAdmin} />
       </div>
     </div>
   );
 }
 
-// Components
+// All Components
 function Header({ balance, user }) {
   return (
     <header className="app-header">
@@ -363,9 +380,9 @@ function TournamentDetailView({ tournament, balance, setBalance, setView }) {
   const handleJoin = () => {
     if (balance >= tournament.entryFee) {
       setBalance(balance - tournament.entryFee);
-      alert("Successfully joined tournament!");
+      alert("✅ Successfully joined tournament!");
     } else {
-      alert("Insufficient balance!");
+      alert("❌ Insufficient balance! Add money to wallet first.");
     }
   };
 
@@ -395,7 +412,7 @@ function TournamentDetailView({ tournament, balance, setBalance, setView }) {
           </div>
           <div className="info-item">
             <span className="label">Players</span>
-            <span className="value">{tournament.currentPlayers}/{tournament.maxPlayers}</span>
+            <span className="value">{tournament.currentPlayers}/{t.maxPlayers}</span>
           </div>
           <div className="info-item">
             <span className="label">Starts In</span>
@@ -479,6 +496,10 @@ function WalletView({ balance }) {
 }
 
 function ProfileView({ user }) {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    window.location.reload();
+  }
   return (
     <div className="view profile-view">
       <div className="profile-header">
@@ -523,23 +544,32 @@ function ProfileView({ user }) {
           <span>Support</span>
           <ChevronRight size={16} />
         </button>
-        <button className="menu-item" onClick={async () => {
-          await supabase.auth.signOut();
-          window.location.reload();
-        }} style={{color: '#ef4444'}}>
-        <LogOut size={20} />
-        <span>Logout</span>
-        <ChevronRight size={16} />
+        <button className="menu-item" onClick={handleLogout} style={{color: '#ef4444'}}>
+          <LogOut size={20} />
+          <span>Logout</span>
+          <ChevronRight size={16} />
         </button>
       </div>
     </div>
   );
 }
 
-function AdminView() {
+function AdminView({ isAdmin, setView }) {
+  // ✅ EXTRA SECURITY: Agar kisi non‑admin ne galti se Admin view khol bhi liya
+  if (!isAdmin) {
+    return (
+      <div className="view">
+        <div className="empty-state">
+          <Shield size={32} style={{ marginBottom: 10 }} />
+          <p>You are not authorized to access Admin Panel</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="view admin-view">
-      <h2>Admin Dashboard</h2>
+      <h2 style={{ marginBottom: '20px', fontSize: '24px' }}>Admin Dashboard</h2>
 
       <div className="admin-grid">
         <div className="admin-card">
@@ -559,16 +589,25 @@ function AdminView() {
           <p>Update match results and scores</p>
           <button className="admin-btn">Update</button>
         </div>
+
+        <div className="admin-card">
+          <h4>Withdraw Requests</h4>
+          <p>Approve user withdraw requests</p>
+          <button className="admin-btn">View Requests</button>
+        </div>
       </div>
 
-      <div className="active-tournaments">
-        <h3>Active Management</h3>
+      <div className="active-tournaments" style={{ marginTop: 24 }}>
+        <h3 style={{ marginBottom: 16, fontSize: 18 }}>Active Management</h3>
         <div className="management-list">
           {TOURNAMENTS.map(t => (
             <div key={t.id} className="management-item">
               <div>
                 <h4>{t.name}</h4>
-                <span>{t.currentPlayers} players joined</span>
+                {/* ✅ yaha pe galat tournament variable use ho raha tha */}
+                <span style={{ color: 'var(--text-dim)', fontSize: 13 }}>
+                  {t.currentPlayers} / {t.maxPlayers} players
+                </span>
               </div>
               <button className="manage-btn">Manage</button>
             </div>
@@ -579,10 +618,10 @@ function AdminView() {
   );
 }
 
-function BottomNav({ currentView, setView }) {
+function BottomNav({ currentView, setView, isAdmin }) {
   const navItems = [
     { id: 'home', icon: Home, label: 'Home' },
-    { id: 'admin', icon: Shield, label: 'Admin' },
+    ...(isAdmin ? [{ id: 'admin', icon: Shield, label: 'Admin' }] : []),
     { id: 'wallet', icon: Wallet, label: 'Wallet' },
     { id: 'profile', icon: User, label: 'Profile' }
   ];

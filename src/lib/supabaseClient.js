@@ -7,4 +7,5 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('Supabase URL and Anon Key are required. Please check your environment variables.');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// ✅ Default export (matches with your import in App.jsx)
+export default createClient(supabaseUrl, supabaseAnonKey);

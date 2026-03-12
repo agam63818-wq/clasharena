@@ -1,25 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Flame, Mail, Lock, Loader, LogIn, UserPlus, LogOut,
-  Trophy, Home, Wallet, User, Shield, Clock, Users, Plus, ChevronRight, Star, Settings
+  Trophy, Home, Wallet, User, Shield, Clock, Users, Plus, ChevronRight, Star, Settings, Edit, Trash2, MessageCircle, Youtube, Instagram
 } from 'lucide-react';
 import supabase from './lib/supabaseClient';
 import './App.css';
-
-// ================== MOCK DATA ==================
-const TOURNAMENTS = [
-  { id: 1, name: "Battle Royale Pro", mode: "Solo", prize: 5000, entryFee: 50, maxPlayers: 100, currentPlayers: 87, status: "live", timeRemaining: "2h 15m", image: "https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800&auto=format&fit=crop" },
-  { id: 2, name: "Power Duo Championship", mode: "Duo", prize: 10000, entryFee: 100, maxPlayers: 50, currentPlayers: 32, status: "upcoming", startTime: "Today, 6:00 PM", image: "https://images.unsplash.com/photo-1511512578047-dfb367046420?w=800&auto=format&fit=crop" },
-  { id: 3, name: "Squad Rush", mode: "Squad", prize: 15000, entryFee: 200, maxPlayers: 25, currentPlayers: 12, status: "registration", startTime: "Tomorrow, 8:00 PM", image: "https://images.unsplash.com/photo-1538481199705-c710c4e965fc?w=800&auto=format&fit=crop" }
-];
-
-const LEADERBOARD = [
-  { rank: 1, name: "ProGamer_X", wins: 24, earnings: 12500 },
-  { rank: 2, name: "Ninja_FF", wins: 21, earnings: 10200 },
-  { rank: 3, name: "BeastMode", wins: 18, earnings: 8900 },
-  { rank: 4, name: "Sniper_King", wins: 15, earnings: 7200 },
-  { rank: 5, name: "Elite_Slayer", wins: 12, earnings: 5400 }
-];
 
 // ================== LOGIN SCREEN ==================
 function LoginScreen() {
@@ -38,9 +23,20 @@ function LoginScreen() {
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         if (data.user) {
-          await supabase.from('profiles').upsert([{ id: data.user.id, username: email.split('@')[0], level: 1, wins: 0, role: 'user', balance: 0 }]);
+          // Default username from email
+          const defaultUsername = email.split('@')[0];
+          await supabase.from('profiles').upsert([{ 
+            id: data.user.id, 
+            username: defaultUsername, 
+            level: 1, 
+            wins: 0, 
+            role: 'user', 
+            balance: 0,
+            ff_id: '',
+            nickname: ''
+          }]);
         }
-        alert("✅ Account Created! You can now login.");
+        alert("✅ Account Created! Please login.");
       }
     } catch (error) {
       alert(error.message);
@@ -55,8 +51,8 @@ function LoginScreen() {
         <div className="login-page view">
           <div className="login-brand">
             <Flame className="brand-icon" size={60} />
-            <h1 style={{fontSize: '32px', fontWeight: 800, marginTop: '10px'}}>CLASH<span className="brand-highlight">ARENA</span></h1>
-            <p style={{color: 'var(--text-dim)', marginTop: '8px'}}>Compete & Win Real Cash</p>
+            <h1>CLASH<span className="brand-highlight">ARENA</span></h1>
+            <p style={{color: 'var(--text-dim)'}}>Compete & Win Real Cash</p>
           </div>
           <div className="login-card">
             <div className="input-group">
@@ -67,8 +63,8 @@ function LoginScreen() {
               <Lock size={20} className="input-icon" />
               <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="form-input" />
             </div>
-            <button onClick={() => handleAuth('login')} disabled={loading} className="btn btn-primary" style={{marginTop: '10px'}}>
-              {loading ? <Loader size={20} className="spin" /> : <LogIn size={20} />} {loading ? "Processing..." : "Login to Arena"}
+            <button onClick={() => handleAuth('login')} disabled={loading} className="btn btn-primary">
+              {loading ? <Loader size={20} className="spin" /> : <LogIn size={20} />} {loading ? "Processing..." : "Login"}
             </button>
             <button onClick={() => handleAuth('signup')} disabled={loading} className="btn btn-outline">
               <UserPlus size={20} /> Create Account
@@ -87,13 +83,16 @@ export default function App() {
   const [userProfile, setUserProfile] = useState(null);
   const [currentView, setCurrentView] = useState('home');
   const [selectedTournament, setSelectedTournament] = useState(null);
+  const [tournaments, setTournaments] = useState([]);
 
+  // Auth Check
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); setAuthLoading(false); });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { setSession(session); });
     return () => listener.subscription.unsubscribe();
   }, []);
 
+  // Fetch Profile
   useEffect(() => {
     if(!session) return;
     const fetchProfile = async () => {
@@ -103,32 +102,51 @@ export default function App() {
     fetchProfile();
   }, [session]);
 
+  // Fetch Tournaments (Real-time)
+  useEffect(() => {
+    const fetchTournaments = async () => {
+      const {data} = await supabase.from('tournaments').select('*').order('created_at', {ascending: false});
+      setTournaments(data || []);
+    };
+    fetchTournaments();
+
+    // Realtime Subscription for Player Count updates
+    const channel = supabase.channel('schema-db-changes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'match_registrations' }, () => {
+        fetchTournaments(); // Refresh list when someone joins
+      })
+      .subscribe();
+
+    return () => supabase.removeChannel(channel);
+  }, []);
+
   if (authLoading) return <div className="app-container"><div className="mobile-frame" style={{display:'flex', justifyContent:'center', alignItems:'center'}}><Flame size={50} className="spin" /></div></div>;
   if (!session) return <LoginScreen />;
 
-  const balance = userProfile?.balance || 0;
   const isAdmin = userProfile?.role === 'admin';
   const user = {
     name: userProfile?.username || session.user.email.split('@')[0],
     level: userProfile?.level || 1,
-    avatar: `https://i.pravatar.cc/150?u=${session.user.id}`
+    avatar: `https://i.pravatar.cc/150?u=${session.user.id}`,
+    ff_id: userProfile?.ff_id || 'Not Set',
+    nickname: userProfile?.nickname || userProfile?.username
   };
 
   const renderContent = () => {
     switch(currentView) {
-      case 'home': return <HomeView onTournamentSelect={(t) => { setSelectedTournament(t); setCurrentView('tournament'); }} />;
-      case 'tournament': return <TournamentDetailView tournament={selectedTournament} balance={balance} setView={setCurrentView} />;
-      case 'wallet': return <WalletView balance={balance} />;
-      case 'profile': return <ProfileView user={user} />;
-      case 'admin': return <AdminView isAdmin={isAdmin} setView={setCurrentView} />;
-      default: return <HomeView onTournamentSelect={(t) => { setSelectedTournament(t); setCurrentView('tournament'); }} />;
+      case 'home': return <HomeView tournaments={tournaments} onTournamentSelect={(t) => { setSelectedTournament(t); setCurrentView('tournament'); }} />;
+      case 'tournament': return <TournamentDetailView tournament={selectedTournament} userProfile={userProfile} setView={setCurrentView} refreshList={() => {/* trigger refresh */}} />;
+      case 'wallet': return <WalletView balance={userProfile?.balance || 0} />;
+      case 'profile': return <ProfileView user={user} profileData={userProfile} />;
+      case 'admin': return <AdminView isAdmin={isAdmin} tournaments={tournaments} setTournaments={setTournaments} session={session} />;
+      default: return <HomeView tournaments={tournaments} onTournamentSelect={(t) => { setSelectedTournament(t); setCurrentView('tournament'); }} />;
     }
   };
 
   return (
     <div className="app-container">
       <div className="mobile-frame">
-        <Header balance={balance} user={user} />
+        <Header balance={userProfile?.balance || 0} user={user} />
         <main className="main-content">{renderContent()}</main>
         <BottomNav currentView={currentView} setView={setCurrentView} isAdmin={isAdmin} />
       </div>
@@ -154,83 +172,152 @@ function Header({ balance, user }) {
   );
 }
 
-function HomeView({ onTournamentSelect }) {
+function HomeView({ tournaments, onTournamentSelect }) {
   return (
     <div className="view home-view">
       <section className="hero-section">
         <div className="status-badge live" style={{marginBottom: '12px'}}><span className="live-dot"></span> LIVE NOW</div>
         <h2>Compete & Win<br/><span className="gradient-text">Real Cash</span></h2>
-        <p style={{color: 'var(--text-dim)', fontSize: '13px', marginTop: '8px'}}>Join 50K+ players in the ultimate arena</p>
       </section>
 
       <section className="stats-row">
         <div className="stat-card"><Trophy size={28} className="stat-icon" /><div><span className="stat-value">₹5L+</span><span className="stat-label">Prize Pool</span></div></div>
-        <div className="stat-card"><Users size={28} className="stat-icon" /><div><span className="stat-value">50K+</span><span className="stat-label">Players</span></div></div>
+        <div className="stat-card"><Users size={28} className="stat-icon" /><div><span className="stat-value">{tournaments.length}+</span><span className="stat-label">Matches</span></div></div>
       </section>
 
       <section className="section">
-        <div className="section-header"><h3>Live Tournaments</h3><button className="see-all-btn">See All <ChevronRight size={16}/></button></div>
-        {TOURNAMENTS.map(t => (
-          <div key={t.id} className="tournament-card" onClick={() => onTournamentSelect(t)}>
-            <div className="tournament-image" style={{backgroundImage: `url(${t.image})`}}>
-              <div className="tournament-overlay">
-                <span className={`status-badge ${t.status}`}>
-                  {t.status === 'live' && <span className="live-dot"></span>}
-                  {t.status}
-                </span>
+        <div className="section-header"><h3>Live Matches</h3></div>
+        {tournaments.length === 0 ? <p style={{textAlign:'center', color:'#666'}}>No matches available yet.</p> : 
+          tournaments.map(t => (
+            <div key={t.id} className="tournament-card" onClick={() => onTournamentSelect(t)}>
+              <div className="tournament-image" style={{backgroundImage: `url(https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800)`}}>
+                <div className="tournament-overlay">
+                  <span className={`status-badge ${t.status}`}>{t.status}</span>
+                </div>
+              </div>
+              <div className="tournament-info">
+                <div className="tournament-header"><h4>{t.name}</h4><span className="prize-tag">₹{t.prize}</span></div>
+                <div className="tournament-meta">
+                  <span className="meta-item"><Users size={16} /> {t.current_players || 0}/{t.max_players}</span>
+                  <span className="meta-item"><Clock size={16} /> {t.match_time ? new Date(t.match_time).toLocaleTimeString() : 'Starting Soon'}</span>
+                </div>
+                <div className="tournament-footer">
+                  <span className="mode-badge">{t.mode}</span>
+                  <span className="entry-fee">Entry: ₹{t.entry_fee}</span>
+                </div>
               </div>
             </div>
-            <div className="tournament-info">
-              <div className="tournament-header"><h4>{t.name}</h4><span className="prize-tag">₹{t.prize}</span></div>
-              <div className="tournament-meta">
-                <span className="meta-item"><Users size={16} /> {t.currentPlayers}/{t.maxPlayers}</span>
-                <span className="meta-item"><Clock size={16} /> {t.timeRemaining || t.startTime}</span>
-              </div>
-              <div className="tournament-footer">
-                <span className="mode-badge">{t.mode}</span>
-                <span className="entry-fee">Entry: ₹{t.entryFee}</span>
-              </div>
-            </div>
-          </div>
-        ))}
-      </section>
-
-      <section className="section" style={{marginTop: '24px'}}>
-        <div className="section-header"><h3>Top Players</h3></div>
-        <div className="leaderboard">
-          {LEADERBOARD.map((player, idx) => (
-            <div key={idx} className={`leaderboard-item rank-${player.rank}`}>
-              <div className="rank">#{player.rank}</div>
-              <div><span className="player-name">{player.name}</span><span className="player-stats">{player.wins} Tournament Wins</span></div>
-              <div className="player-earnings">₹{player.earnings}</div>
-            </div>
-          ))}
-        </div>
+          ))
+        }
       </section>
     </div>
   );
 }
 
-function TournamentDetailView({ tournament, balance, setView }) {
+function TournamentDetailView({ tournament, userProfile, setView }) {
+  const [joining, setJoining] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+
+  // Check if already joined
+  const [alreadyJoined, setAlreadyJoined] = useState(false);
+  useEffect(() => {
+    if(!tournament || !userProfile) return;
+    const checkJoin = async () => {
+      const {data} = await supabase.from('match_registrations').select('*').eq('tournament_id', tournament.id).eq('user_id', userProfile.id).single();
+      if(data) setAlreadyJoined(true);
+    };
+    checkJoin();
+  }, [tournament, userProfile]);
+
+  const handleJoin = async () => {
+    if(!userProfile.ff_id || !userProfile.nickname) {
+      alert("⚠️ Please set your FF ID and Nickname in Profile first!");
+      setView('profile');
+      return;
+    }
+
+    if(userProfile.balance < tournament.entry_fee) {
+      alert("❌ Insufficient Balance!");
+      return;
+    }
+
+    setJoining(true);
+    // 1. Deduct Balance
+    const newBal = userProfile.balance - tournament.entry_fee;
+    await supabase.from('profiles').update({balance: newBal}).eq('id', userProfile.id);
+
+    // 2. Register User
+    const {error} = await supabase.from('match_registrations').insert({
+      tournament_id: tournament.id,
+      user_id: userProfile.id,
+      status: 'joined'
+    });
+
+    // 3. Update Player Count
+    if(!error) {
+      await supabase.rpc('increment_player_count', {match_id: tournament.id}); // You might need a function or just manual update
+      // Simple manual update for now:
+      const currentCount = tournament.current_players || 0;
+      await supabase.from('tournaments').update({current_players: currentCount + 1}).eq('id', tournament.id);
+
+      setAlreadyJoined(true);
+      setShowDetails(true);
+      alert("✅ Joined Successfully!");
+    } else {
+      alert("Error: " + error.message);
+    }
+    setJoining(false);
+  };
+
   if (!tournament) return null;
+
   return (
     <div className="view detail-view">
       <button className="back-btn" onClick={() => setView('home')}>← Back</button>
-      <div className="detail-hero" style={{backgroundImage: `url(${tournament.image})`}}>
+      <div className="detail-hero" style={{backgroundImage: `url(https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800)`}}>
         <div className="detail-hero-overlay">
           <span className={`status-badge ${tournament.status}`} style={{marginBottom: '10px'}}>{tournament.status}</span>
           <h2>{tournament.name}</h2>
-          <div className="detail-prize">Prize Pool: ₹{tournament.prize}</div>
+          <div className="detail-prize">Prize: ₹{tournament.prize}</div>
         </div>
       </div>
+
       <div className="view">
         <div className="info-grid">
-          <div className="info-item"><span className="label">Entry Fee</span><span className="value">₹{tournament.entryFee}</span></div>
+          <div className="info-item"><span className="label">Entry Fee</span><span className="value">₹{tournament.entry_fee}</span></div>
           <div className="info-item"><span className="label">Mode</span><span className="value">{tournament.mode}</span></div>
-          <div className="info-item"><span className="label">Players Joined</span><span className="value">{tournament.currentPlayers}/{tournament.maxPlayers}</span></div>
-          <div className="info-item"><span className="label">Starts In</span><span className="value">{tournament.timeRemaining || tournament.startTime}</span></div>
+          <div className="info-item"><span className="label">Players</span><span className="value">{tournament.current_players || 0}/{tournament.max_players}</span></div>
+          <div className="info-item"><span className="label">Start Time</span><span className="value">{tournament.match_time ? new Date(tournament.match_time).toLocaleString() : 'TBA'}</span></div>
         </div>
-        <button className="btn btn-primary" onClick={() => alert("Tournament Joined!")}><Trophy size={20}/> Join Now (₹{tournament.entryFee})</button>
+
+        {/* Rules Section */}
+        <div style={{background: '#1a1a1a', padding: '15px', borderRadius: '12px', marginBottom: '20px'}}>
+          <h4 style={{color: 'var(--primary)', marginBottom: '8px'}}>📜 Match Rules</h4>
+          <p style={{whiteSpace: 'pre-line', fontSize: '13px', color: '#ccc'}}>{tournament.rules || 'No specific rules defined.'}</p>
+        </div>
+
+        {!alreadyJoined ? (
+          <button className="btn btn-primary" onClick={handleJoin} disabled={joining}>
+            {joining ? <Loader className="spin" size={20}/> : <Trophy size={20}/>} 
+            Join Now (₹{tournament.entry_fee})
+          </button>
+        ) : (
+          <div style={{background: 'rgba(34, 197, 94, 0.1)', border: '1px solid #22c55e', padding: '20px', borderRadius: '16px', textAlign: 'center'}}>
+            <h3 style={{color: '#22c55e', marginBottom: '15px'}}>✅ You are Registered!</h3>
+
+            {!showDetails && <button className="btn btn-outline" onClick={() => setShowDetails(true)} style={{marginBottom: '15px'}}>Show Room Details</button>}
+
+            {showDetails && (
+              <>
+                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '15px'}}>
+                  <div className="info-item"><span className="label">Room ID</span><span className="value">{tournament.room_id || 'Wait for Admin'}</span></div>
+                  <div className="info-item"><span className="label">Password</span><span className="value">{tournament.room_password || 'Wait for Admin'}</span></div>
+                </div>
+                <p style={{fontSize: '12px', color: '#aaa'}}>Room details will be active 15 mins before match.</p>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -244,239 +331,399 @@ function WalletView({ balance }) {
         <p style={{color: 'var(--text-dim)', fontWeight: 600}}>Total Balance</p>
         <h1 style={{color: 'var(--gold)', fontSize: '48px', margin: '10px 0'}}>₹{balance}</h1>
         <div style={{display: 'flex', gap: '10px', marginTop: '20px'}}>
-          <button className="btn btn-primary" onClick={() => alert("Add Money Flow")}>Add Money</button>
-          <button className="btn btn-outline" onClick={() => alert("Withdraw Flow")}>Withdraw</button>
+          <button className="btn btn-primary" onClick={() => alert("UPI: your-upi-id@paytm\nSend screenshot on WhatsApp")}>Add Money</button>
+          <button className="btn btn-outline" onClick={() => alert("Min withdrawal ₹100. Contact Support.")}>Withdraw</button>
         </div>
       </div>
     </div>
   );
 }
 
-function ProfileView({ user }) {
-  const logout = async () => { await supabase.auth.signOut(); window.location.reload(); };
+function ProfileView({ user, profileData }) {
+  const [editing, setEditing] = useState(false);
+  const [ffId, setFfId] = useState(profileData?.ff_id || '');
+  const [nick, setNick] = useState(profileData?.nickname || '');
+
+  const saveProfile = async () => {
+    await supabase.from('profiles').update({ff_id: ffId, nickname: nick}).eq('id', profileData.id);
+    alert("✅ Profile Updated!");
+    setEditing(false);
+    window.location.reload();
+  };
+
   return (
     <div className="view">
       <div style={{textAlign: 'center', marginBottom: '30px'}}>
         <img src={user.avatar} alt="Profile" className="profile-avatar-large" />
-        <h2 style={{fontSize: '24px', fontWeight: 800}}>{user.name}</h2>
+        <h2 style={{fontSize: '24px', fontWeight: 800}}>{user.nickname || user.name}</h2>
         <span className="status-badge upcoming" style={{marginTop: '10px'}}>Level {user.level}</span>
+
+        {editing ? (
+          <div style={{marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '300px', margin: '20px auto'}}>
+            <input className="form-input" placeholder="Free Fire UID" value={ffId} onChange={e=>setFfId(e.target.value)} />
+            <input className="form-input" placeholder="In-Game Nickname" value={nick} onChange={e=>setNick(e.target.value)} />
+            <button className="btn btn-primary" onClick={saveProfile}>Save Changes</button>
+            <button className="btn btn-outline" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+        ) : (
+          <button className="btn btn-outline" style={{width: 'auto', margin: '20px auto', padding: '8px 20px'}} onClick={() => setEditing(true)}>Edit Profile</button>
+        )}
       </div>
+
       <div className="menu-list">
-        <div className="menu-item"><Settings size={20} color="var(--primary)"/> Account Settings <ChevronRight size={16} style={{marginLeft: 'auto'}}/></div>
-        <div className="menu-item"><Trophy size={20} color="var(--gold)"/> Match History <ChevronRight size={16} style={{marginLeft: 'auto'}}/></div>
-        <div className="menu-item" onClick={logout} style={{color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.2)'}}><LogOut size={20}/> Logout</div>
+        <div className="menu-item"><MessageCircle size={20} color="#25D366"/> <span>WhatsApp Support</span> <ChevronRight size={16} style={{marginLeft: 'auto'}}/></div>
+        <div className="menu-item"><Youtube size={20} color="#FF0000"/> <span>YouTube Channel</span> <ChevronRight size={16} style={{marginLeft: 'auto'}}/></div>
+        <div className="menu-item"><Instagram size={20} color="#E1306C"/> <span>Follow on Insta</span> <ChevronRight size={16} style={{marginLeft: 'auto'}}/></div>
+        <div className="menu-item" onClick={async () => { await supabase.auth.signOut(); window.location.reload(); }} style={{color: 'var(--danger)', borderColor: 'rgba(239,68,68,0.2)'}}><LogOut size={20}/> Logout</div>
       </div>
     </div>
   );
 }
 
-function AdminView({ isAdmin, setView }) {
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [newTournament, setNewTournament] = useState({
-    name: '',
-    mode: 'Solo',
-    prize: '',
-    entryFee: '',
-    maxPlayers: 100,
-    status: 'registration',
-    image: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800'
-  });
+const EMPTY_FORM = {
+  name: '', mode: 'Solo', prize: '', entry_fee: '', max_players: 100,
+  status: 'registration', match_time: '', image_url: '', rules: '',
+  room_id: '', room_password: ''
+};
 
-  // ✅ Real Supabase Insert Function
-  const handleCreateTournament = async () => {
-    if (!newTournament.name || !newTournament.prize || !newTournament.entryFee) {
-      alert("❌ Please fill all fields!");
-      return;
-    }
+function TournamentForm({ initial, onSave, onCancel, saving }) {
+  const [form, setForm] = useState(initial || EMPTY_FORM);
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('tournaments')
-        .insert([
-          {
-            name: newTournament.name,
-            mode: newTournament.mode,
-            prize: parseInt(newTournament.prize),
-            entry_fee: parseInt(newTournament.entryFee),
-            max_players: parseInt(newTournament.maxPlayers),
-            status: newTournament.status,
-            image_url: newTournament.image,
-            current_players: 0
-          }
-        ])
-        .select();
-
-      if (error) throw error;
-
-      alert(`✅ Tournament "${newTournament.name}" Created Successfully!`);
-      setShowCreateForm(false);
-      setNewTournament({
-        name: '', mode: 'Solo', prize: '', entryFee: '', maxPlayers: 100, status: 'registration', image: ''
-      });
-
-    } catch (error) {
-      alert("❌ Error: " + error.message);
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (!isAdmin) {
-    return (
-      <div className="view empty-state">
-        <Shield size={48} color="#ef4444" />
-        <p>Access Denied</p>
-      </div>
-    );
-  }
+  const inputStyle = { background: '#0d0d14', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '12px 14px', color: 'white', fontSize: '14px', width: '100%', outline: 'none' };
+  const labelStyle = { fontSize: '11px', color: 'var(--text-dim)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px', display: 'block' };
+  const row2 = { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' };
 
   return (
-    <div className="view" style={{ paddingBottom: '100px' }}>
-      <h2 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '20px' }}>
-        Admin Control
-      </h2>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div>
+        <label style={labelStyle}>Tournament Name *</label>
+        <input style={inputStyle} placeholder="e.g. Battle Royale Pro" value={form.name} onChange={e => set('name', e.target.value)} />
+      </div>
 
-      {/* Create Tournament Form - Modal Style */}
-      {showCreateForm && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.8)', zIndex: 100, display: 'flex',
-          alignItems: 'center', justifyContent: 'center', padding: '20px'
-        }}>
-          <div style={{
-            background: '#16161f', width: '100%', maxWidth: '380px',
-            borderRadius: '20px', padding: '24px', border: '1px solid rgba(255,77,0,0.3)'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0 }}>Create New Event</h3>
-              <button onClick={() => setShowCreateForm(false)} style={{ background: 'none', border: 'none', color: 'white' }}>✕</button>
-            </div>
+      <div style={row2}>
+        <div>
+          <label style={labelStyle}>Mode *</label>
+          <select style={inputStyle} value={form.mode} onChange={e => { set('mode', e.target.value); if (e.target.value === '1v1') set('max_players', 2); }}>
+            <option>Solo</option>
+            <option>Duo</option>
+            <option>Squad</option>
+            <option>1v1</option>
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Status *</label>
+          <select style={inputStyle} value={form.status} onChange={e => set('status', e.target.value)}>
+            <option value="registration">Registration</option>
+            <option value="upcoming">Upcoming</option>
+            <option value="live">Live</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
+      </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <input
-                type="text"
-                placeholder="Tournament Name"
-                value={newTournament.name}
-                onChange={(e) => setNewTournament({...newTournament, name: e.target.value})}
-                style={{
-                  background: '#0a0a0f', border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: '12px', padding: '14px', color: 'white'
-                }}
-              />
+      <div style={row2}>
+        <div>
+          <label style={labelStyle}>Prize Pool (₹) *</label>
+          <input style={inputStyle} type="number" placeholder="5000" value={form.prize} onChange={e => set('prize', e.target.value)} />
+        </div>
+        <div>
+          <label style={labelStyle}>Entry Fee (₹) *</label>
+          <input style={inputStyle} type="number" placeholder="50" value={form.entry_fee} onChange={e => set('entry_fee', e.target.value)} />
+        </div>
+      </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <input
-                  type="number"
-                  placeholder="Prize ₹"
-                  value={newTournament.prize}
-                  onChange={(e) => setNewTournament({...newTournament, prize: e.target.value})}
-                  style={{
-                    background: '#0a0a0f', border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: '12px', padding: '14px', color: 'white'
-                  }}
-                />
-                <input
-                  type="number"
-                  placeholder="Entry ₹"
-                  value={newTournament.entryFee}
-                  onChange={(e) => setNewTournament({...newTournament, entryFee: e.target.value})}
-                  style={{
-                    background: '#0a0a0f', border: '1px solid rgba(255,255,255,0.1)',
-                    borderRadius: '12px', padding: '14px', color: 'white'
-                  }}
-                />
+      <div style={row2}>
+        <div>
+          <label style={labelStyle}>Max Players</label>
+          <input style={inputStyle} type="number" placeholder="100" value={form.max_players} onChange={e => set('max_players', e.target.value)} />
+        </div>
+        <div>
+          <label style={labelStyle}>Match Time</label>
+          <input style={inputStyle} type="datetime-local" value={form.match_time} onChange={e => set('match_time', e.target.value)} />
+        </div>
+      </div>
+
+      <div>
+        <label style={labelStyle}>Banner Image URL</label>
+        <input style={inputStyle} placeholder="https://..." value={form.image_url} onChange={e => set('image_url', e.target.value)} />
+      </div>
+
+      <div style={row2}>
+        <div>
+          <label style={labelStyle}>Room ID</label>
+          <input style={inputStyle} placeholder="Room ID" value={form.room_id} onChange={e => set('room_id', e.target.value)} />
+        </div>
+        <div>
+          <label style={labelStyle}>Room Password</label>
+          <input style={inputStyle} placeholder="Password" value={form.room_password} onChange={e => set('room_password', e.target.value)} />
+        </div>
+      </div>
+
+      <div>
+        <label style={labelStyle}>Rules & Instructions</label>
+        <textarea
+          style={{ ...inputStyle, minHeight: '120px', resize: 'vertical', fontFamily: 'inherit', lineHeight: '1.6' }}
+          placeholder={"1. Level 50+ required\n2. No emulators allowed\n3. Room code shared 15 mins before start\n4. Results announced after match"}
+          value={form.rules}
+          onChange={e => set('rules', e.target.value)}
+        />
+      </div>
+
+      <div style={{ display: 'flex', gap: '10px', marginTop: '4px' }}>
+        <button
+          className="btn btn-primary"
+          style={{ flex: 1 }}
+          onClick={() => onSave(form)}
+          disabled={saving}
+        >
+          {saving ? <Loader size={16} className="spin" /> : <Plus size={16} />}
+          {saving ? 'Saving...' : 'Save Tournament'}
+        </button>
+        <button className="btn btn-outline" style={{ flex: 1 }} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function AdminView({ isAdmin, tournaments, setTournaments, session }) {
+  const [view, setView] = useState('dashboard');
+  const [editData, setEditData] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [registrationCounts, setRegistrationCounts] = useState({});
+
+  useEffect(() => {
+    const fetchCounts = async () => {
+      const { data } = await supabase.from('match_registrations').select('tournament_id');
+      if (data) {
+        const counts = {};
+        data.forEach(r => { counts[r.tournament_id] = (counts[r.tournament_id] || 0) + 1; });
+        setRegistrationCounts(counts);
+      }
+    };
+    fetchCounts();
+  }, [tournaments]);
+
+  if (!isAdmin) return (
+    <div className="view" style={{ textAlign: 'center', paddingTop: '60px' }}>
+      <Shield size={56} color="#ef4444" style={{ marginBottom: '16px' }} />
+      <h3>Access Denied</h3>
+      <p style={{ color: 'var(--text-dim)', marginTop: '8px' }}>Admin only area</p>
+    </div>
+  );
+
+  const handleCreate = async (form) => {
+    if (!form.name || !form.prize) return alert('Tournament Name and Prize are required');
+    setSaving(true);
+    const { data, error } = await supabase.from('tournaments').insert([{
+      ...form,
+      prize: Number(form.prize),
+      entry_fee: Number(form.entry_fee),
+      max_players: Number(form.max_players),
+      match_time: form.match_time || null,
+      image_url: form.image_url || null
+    }]).select();
+    setSaving(false);
+    if (error) return alert('Error: ' + error.message);
+    setTournaments([data[0], ...tournaments]);
+    alert('✅ Tournament Created!');
+    setView('dashboard');
+  };
+
+  const handleUpdate = async (form) => {
+    if (!form.name || !form.prize) return alert('Tournament Name and Prize are required');
+    setSaving(true);
+    const { error } = await supabase.from('tournaments').update({
+      ...form,
+      prize: Number(form.prize),
+      entry_fee: Number(form.entry_fee),
+      max_players: Number(form.max_players),
+      match_time: form.match_time || null,
+      image_url: form.image_url || null
+    }).eq('id', editData.id);
+    setSaving(false);
+    if (error) return alert('Error: ' + error.message);
+    setTournaments(tournaments.map(t => t.id === editData.id ? { ...t, ...form } : t));
+    alert('✅ Tournament Updated!');
+    setView('list');
+    setEditData(null);
+  };
+
+  const handleDelete = async (id, name) => {
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    const { error } = await supabase.from('tournaments').delete().eq('id', id);
+    if (error) return alert('Error: ' + error.message);
+    setTournaments(tournaments.filter(t => t.id !== id));
+  };
+
+  const openEdit = (t) => {
+    setEditData({
+      ...t,
+      match_time: t.match_time ? new Date(t.match_time).toISOString().slice(0, 16) : ''
+    });
+    setView('edit');
+  };
+
+  const totalReg = Object.values(registrationCounts).reduce((a, b) => a + b, 0);
+  const liveCount = tournaments.filter(t => t.status === 'live').length;
+  const upcomingCount = tournaments.filter(t => t.status === 'upcoming').length;
+  const regCount = tournaments.filter(t => t.status === 'registration').length;
+
+  const filtered = tournaments.filter(t => {
+    const matchSearch = t.name.toLowerCase().includes(search.toLowerCase());
+    const matchStatus = filterStatus === 'all' || t.status === filterStatus;
+    return matchSearch && matchStatus;
+  });
+
+  const statusColor = { live: '#ef4444', upcoming: '#3b82f6', registration: '#22c55e', completed: '#888' };
+  const cardStyle = { background: '#16161f', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '16px', padding: '18px' };
+
+  if (view === 'create') return (
+    <div className="view">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+        <button onClick={() => setView('dashboard')} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '20px' }}>←</button>
+        <h2 style={{ fontSize: '20px', fontWeight: 800 }}>Create Tournament</h2>
+      </div>
+      <TournamentForm onSave={handleCreate} onCancel={() => setView('dashboard')} saving={saving} />
+    </div>
+  );
+
+  if (view === 'edit') return (
+    <div className="view">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+        <button onClick={() => setView('list')} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '20px' }}>←</button>
+        <h2 style={{ fontSize: '20px', fontWeight: 800 }}>Edit Tournament</h2>
+      </div>
+      <TournamentForm initial={editData} onSave={handleUpdate} onCancel={() => { setView('list'); setEditData(null); }} saving={saving} />
+    </div>
+  );
+
+  if (view === 'list') return (
+    <div className="view">
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+        <button onClick={() => setView('dashboard')} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', fontSize: '20px' }}>←</button>
+        <h2 style={{ fontSize: '20px', fontWeight: 800 }}>All Tournaments</h2>
+      </div>
+
+      <input
+        style={{ background: '#0d0d14', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '10px 14px', color: 'white', width: '100%', marginBottom: '12px', outline: 'none' }}
+        placeholder="Search tournaments..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+      />
+
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        {['all', 'live', 'upcoming', 'registration', 'completed'].map(s => (
+          <button key={s} onClick={() => setFilterStatus(s)} style={{ padding: '5px 12px', borderRadius: '20px', border: '1px solid rgba(255,255,255,0.15)', background: filterStatus === s ? 'var(--primary)' : 'transparent', color: filterStatus === s ? 'white' : 'var(--text-dim)', cursor: 'pointer', fontSize: '12px', textTransform: 'capitalize' }}>
+            {s}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {filtered.length === 0 && <p style={{ color: 'var(--text-dim)', textAlign: 'center', padding: '30px' }}>No tournaments found.</p>}
+        {filtered.map(t => (
+          <div key={t.id} style={{ ...cardStyle, borderLeft: `3px solid ${statusColor[t.status] || '#888'}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <h4 style={{ fontSize: '15px', fontWeight: 700, marginBottom: '6px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</h4>
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '12px', color: 'var(--text-dim)' }}>
+                  <span style={{ color: statusColor[t.status], fontWeight: 600, textTransform: 'uppercase' }}>{t.status}</span>
+                  <span>₹{t.prize} Prize</span>
+                  <span>Entry ₹{t.entry_fee}</span>
+                  <span>{registrationCounts[t.id] || 0}/{t.max_players} Joined</span>
+                </div>
+                {t.match_time && (
+                  <div style={{ fontSize: '12px', color: '#aaa', marginTop: '4px' }}>
+                    🕐 {new Date(t.match_time).toLocaleString()}
+                  </div>
+                )}
+                {t.room_id && (
+                  <div style={{ fontSize: '12px', color: '#facc15', marginTop: '4px' }}>
+                    🔐 Room: {t.room_id} | Pass: {t.room_password || '—'}
+                  </div>
+                )}
               </div>
-
-              <select
-                value={newTournament.mode}
-                onChange={(e) => setNewTournament({...newTournament, mode: e.target.value})}
-                style={{
-                  background: '#0a0a0f', border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: '12px', padding: '14px', color: 'white'
-                }}
-              >
-                <option value="Solo">Solo</option>
-                <option value="Duo">Duo</option>
-                <option value="Squad">Squad</option>
-              </select>
-
-              <select
-                value={newTournament.status}
-                onChange={(e) => setNewTournament({...newTournament, status: e.target.value})}
-                style={{
-                  background: '#0a0a0f', border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: '12px', padding: '14px', color: 'white'
-                }}
-              >
-                <option value="registration">Registration Open</option>
-                <option value="upcoming">Upcoming</option>
-                <option value="live">Live Now</option>
-              </select>
-
-              <button
-                onClick={handleCreateTournament}
-                disabled={loading}
-                style={{
-                  background: 'linear-gradient(135deg, #ff4d00, #ff6b00)',
-                  color: 'white', border: 'none', padding: '16px',
-                  borderRadius: '12px', fontWeight: 700, marginTop: '10px',
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  opacity: loading ? 0.7 : 1
-                }}
-              >
-                {loading ? 'Creating...' : '➕ Create Tournament'}
-              </button>
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                <button
+                  onClick={() => openEdit(t)}
+                  style={{ background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#3b82f6', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', fontSize: '12px' }}
+                >
+                  <Edit size={14} />
+                </button>
+                <button
+                  onClick={() => handleDelete(t.id, t.name)}
+                  style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', fontSize: '12px' }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
 
-      {/* Dashboard Grid */}
-      <div className="admin-grid">
-        <div className="admin-card">
-          <h4>🎮 Create Tournament</h4>
-          <p style={{ fontSize: '13px', color: 'var(--text-dim)', margin: '8px 0' }}>
-            Add new Free Fire events
-          </p>
-          <button 
-            className="admin-btn" 
-            onClick={() => setShowCreateForm(true)}
-          >
-            + New Event
-          </button>
-        </div>
+      <button className="btn btn-primary" style={{ marginTop: '20px', width: '100%' }} onClick={() => setView('create')}>
+        <Plus size={16} /> Add New Tournament
+      </button>
+    </div>
+  );
 
-        <div className="admin-card">
-          <h4>📋 Active Tournaments</h4>
-          <p style={{ fontSize: '13px', color: 'var(--text-dim)', margin: '8px 0' }}>
-            Manage participants & results
-          </p>
-          <button className="admin-btn" onClick={() => alert("Feature coming soon")}>
-            View List
-          </button>
-        </div>
+  return (
+    <div className="view">
+      <h2 style={{ fontSize: '22px', fontWeight: 800, marginBottom: '20px' }}>Admin Dashboard</h2>
 
-        <div className="admin-card">
-          <h4>💰 Withdraw Requests</h4>
-          <p style={{ fontSize: '13px', color: 'var(--text-dim)', margin: '8px 0' }}>
-            Approve user withdrawals
-          </p>
-          <button className="admin-btn" onClick={() => alert("No pending requests")}>
-            Approve (0)
-          </button>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
+        <div style={{ ...cardStyle, background: 'linear-gradient(135deg, rgba(255,77,0,0.15), #16161f)', borderColor: 'rgba(255,77,0,0.2)' }}>
+          <div style={{ fontSize: '28px', fontWeight: 800, color: 'var(--primary)' }}>{tournaments.length}</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginTop: '4px' }}>Total Tournaments</div>
         </div>
+        <div style={{ ...cardStyle, background: 'linear-gradient(135deg, rgba(34,197,94,0.15), #16161f)', borderColor: 'rgba(34,197,94,0.2)' }}>
+          <div style={{ fontSize: '28px', fontWeight: 800, color: '#22c55e' }}>{totalReg}</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginTop: '4px' }}>Total Registrations</div>
+        </div>
+        <div style={{ ...cardStyle, background: 'linear-gradient(135deg, rgba(239,68,68,0.15), #16161f)', borderColor: 'rgba(239,68,68,0.2)' }}>
+          <div style={{ fontSize: '28px', fontWeight: 800, color: '#ef4444' }}>{liveCount}</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginTop: '4px' }}>Live Now</div>
+        </div>
+        <div style={{ ...cardStyle, background: 'linear-gradient(135deg, rgba(59,130,246,0.15), #16161f)', borderColor: 'rgba(59,130,246,0.2)' }}>
+          <div style={{ fontSize: '28px', fontWeight: 800, color: '#3b82f6' }}>{upcomingCount + regCount}</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginTop: '4px' }}>Upcoming/Open</div>
+        </div>
+      </div>
 
-        <div className="admin-card">
-          <h4>👥 User Management</h4>
-          <p style={{ fontSize: '13px', color: 'var(--text-dim)', margin: '8px 0' }}>
-            Ban/Kick players
-          </p>
-          <button className="admin-btn" onClick={() => alert("User list loading...")}>
-            Manage Users
-          </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <button className="btn btn-primary" onClick={() => setView('create')}>
+          <Plus size={18} /> Create New Tournament
+        </button>
+        <button className="btn btn-outline" onClick={() => setView('list')}>
+          <Settings size={18} /> Manage All Tournaments ({tournaments.length})
+        </button>
+      </div>
+
+      <div style={{ marginTop: '24px' }}>
+        <h3 style={{ fontSize: '16px', fontWeight: 700, marginBottom: '12px', color: 'var(--text-dim)' }}>Recent Tournaments</h3>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          {tournaments.slice(0, 4).map(t => (
+            <div key={t.id} style={{ ...cardStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '14px' }}>{t.name}</div>
+                <div style={{ fontSize: '12px', color: statusColor[t.status] || '#888', marginTop: '2px', textTransform: 'uppercase', fontWeight: 600 }}>
+                  {t.status} • {registrationCounts[t.id] || 0} joined
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => openEdit(t)} style={{ background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#3b82f6', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer' }}>
+                  <Edit size={14} />
+                </button>
+                <button onClick={() => handleDelete(t.id, t.name)} style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer' }}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>

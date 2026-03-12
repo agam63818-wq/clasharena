@@ -1,0 +1,39 @@
+You are working on a Vite + React app (single file App.jsx) using Supabase auth and tables: profiles, tournaments, match_registrations. 
+Goal: upgrade the app to a professional tournament platform with a clean admin panel and correct game flow, without breaking existing UI theme.
+
+1) Fix Supabase RLS so admin can INSERT/UPDATE/DELETE tournaments and all users can SELECT tournaments. 
+   - Provide SQL migration: drop old policies safely, create correct policies for tournaments and match_registrations.
+   - Ensure policies use authenticated/anon correctly and admin check uses profiles.role='admin'.
+   - Add INSERT policy for match_registrations so users can join (WITH CHECK auth.uid()=user_id).
+
+2) Admin Panel (Professional):
+   - Replace current AdminView with a professional layout:
+     a) Dashboard cards with stats: total tournaments, total registrations (count), live/upcoming/registration counts.
+     b) Tournaments management list with search + filter by status.
+     c) Create Tournament modal form:
+        fields: name, mode(Solo/Duo/Squad/1v1), prize (numeric), entry_fee, max_players, status, match_time (datetime-local), image_url, rules (textarea), room_id, room_password
+        On save: insert into tournaments (creator_id = auth user id)
+     d) Edit Tournament: same modal prefilled, update row
+     e) Delete Tournament: confirm dialog, delete row
+
+3) Home screen:
+   - Show tournaments from Supabase with correct players count:
+     current_players should be computed from match_registrations count, NOT manual increment (avoid race condition).
+     Create a Supabase view or RPC function or do a query per tournament to count registrations.
+   - Show countdown timer "Starts in HH:MM:SS" for match_time, updating every second.
+   - For 1v1 matches default max_players = 2 when admin selects mode=1v1.
+
+4) Join Flow:
+   - When user clicks Join, open a modal requiring:
+     Free Fire UID (ff_uid) and In-game nickname (ign)
+   - Save these fields into match_registrations columns (add SQL migration to add ff_uid, ign columns).
+   - Do not expose ff_uid publicly. In public participant lists show only app username.
+   - After join success, show "Room ID/Password" in-app (only to joined users), using tournaments.room_id and room_password.
+
+5) Profile page:
+   - Add Support section with clickable buttons/links:
+     WhatsApp group link, WhatsApp support number, YouTube link, Instagram link.
+   - Add profile edit for ff_id and nickname (optional), but join modal still requires ff_uid/ign.
+
+6) Keep existing theme (App.css) and avoid introducing new dependencies other than lucide-react.
+Return final updated code for App.jsx and the required SQL migrations.

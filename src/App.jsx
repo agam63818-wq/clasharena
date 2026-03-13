@@ -48,7 +48,7 @@ function LoginScreen() {
   return (
     <div className="app-container">
       <div className="mobile-frame">
-        <div className="login-page view">
+        <div className="login-page">
           <div className="login-brand">
             <Flame className="brand-icon" size={60} />
             <h1>CLASH<span className="brand-highlight">ARENA</span></h1>

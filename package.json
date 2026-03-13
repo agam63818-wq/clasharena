@@ -4,7 +4,7 @@
   "type": "module",
   "description": "React TypeScript on Replit, using Vite bundler",
   "scripts": {
-    "dev": "vite",
+    "dev": "fuser -k 5000/tcp 2>/dev/null; sleep 1; vite",
     "build": "vite build",
     "preview": "vite preview"
   },

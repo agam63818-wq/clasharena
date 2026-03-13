@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Flame, Mail, Lock, Loader, LogIn, UserPlus, LogOut,
   Trophy, Home, Wallet, User, Shield, Clock, Users, Plus, ChevronRight, Star, 
@@ -6,6 +7,61 @@ import {
 } from 'lucide-react';
 import supabase from './lib/supabaseClient';
 import './App.css';
+
+// ===== ANIMATION VARIANTS =====
+const pageVariants = {
+  initial: { opacity: 0, y: 20 },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] } },
+  exit:    { opacity: 0, y: -12, transition: { duration: 0.2 } }
+};
+
+const cardVariants = {
+  hover: { scale: 1.03, transition: { duration: 0.25 } },
+  tap:   { scale: 0.97, transition: { duration: 0.25 } }
+};
+
+const staggerContainer = {
+  animate: { transition: { staggerChildren: 0.07 } }
+};
+
+const staggerItem = {
+  initial: { opacity: 0, y: 16 },
+  animate: { opacity: 1, y: 0, transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] } }
+};
+
+const modalBackdrop = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit:    { opacity: 0 }
+};
+
+const modalContent = {
+  initial: { opacity: 0, scale: 0.9, y: 20 },
+  animate: { opacity: 1, scale: 1,   y: 0, transition: { type: 'spring', stiffness: 300, damping: 28 } },
+  exit:    { opacity: 0, scale: 0.9, y: 20, transition: { duration: 0.2 } }
+};
+
+// ===== SKELETON LOADER =====
+function TournamentSkeleton() {
+  return (
+    <motion.div
+      className="tournament-card"
+      animate={{ opacity: [0.4, 0.8, 0.4] }}
+      transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+      style={{ pointerEvents: 'none' }}
+    >
+      <div className="skeleton-image" />
+      <div className="tournament-info" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div className="skeleton-line" style={{ height: 18, width: '70%' }} />
+        <div className="skeleton-line" style={{ height: 13, width: '50%' }} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div className="skeleton-line" style={{ height: 13, width: '35%' }} />
+          <div className="skeleton-line" style={{ height: 13, width: '35%' }} />
+        </div>
+      </div>
+    </motion.div>
+  );
+}
 
 // ================== LOGIN SCREEN ==================
 function LoginScreen() {
@@ -26,14 +82,8 @@ function LoginScreen() {
         if (data.user) {
           const defaultUsername = email.split('@')[0];
           await supabase.from('profiles').insert([{ 
-            id: data.user.id, 
-            username: defaultUsername, 
-            level: 1, 
-            wins: 0, 
-            role: 'user', 
-            balance: 0,
-            ff_id: '',
-            nickname: ''
+            id: data.user.id, username: defaultUsername, level: 1, wins: 0, 
+            role: 'user', balance: 0, ff_id: '', nickname: ''
           }]);
         }
         alert("✅ Account Created! Please login.");
@@ -49,27 +99,52 @@ function LoginScreen() {
     <div className="app-container">
       <div className="mobile-frame">
         <div className="login-page">
-          <div className="login-brand">
-            <Flame className="brand-icon" size={60} />
+          <motion.div
+            className="login-brand"
+            initial={{ opacity: 0, y: -30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <motion.div
+              animate={{ rotate: [0, -8, 8, -4, 4, 0], filter: ['drop-shadow(0 0 8px rgba(255,77,0,0.4))', 'drop-shadow(0 0 20px rgba(255,77,0,0.9))', 'drop-shadow(0 0 8px rgba(255,77,0,0.4))'] }}
+              transition={{ duration: 2.5, repeat: Infinity, repeatDelay: 2 }}
+            >
+              <Flame className="brand-icon" size={60} />
+            </motion.div>
             <h1>CLASH<span className="brand-highlight">ARENA</span></h1>
             <p style={{color: 'var(--text-dim)'}}>Compete & Win Real Cash</p>
-          </div>
-          <div className="login-card">
-            <div className="input-group">
+          </motion.div>
+
+          <motion.div
+            className="login-card"
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <motion.div className="input-group" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.35 }}>
               <Mail size={20} className="input-icon" />
               <input type="email" placeholder="Email Address" value={email} onChange={(e) => setEmail(e.target.value)} className="form-input" />
-            </div>
-            <div className="input-group">
+            </motion.div>
+            <motion.div className="input-group" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.45 }}>
               <Lock size={20} className="input-icon" />
               <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="form-input" />
-            </div>
-            <button onClick={() => handleAuth('login')} disabled={loading} className="btn btn-primary">
+            </motion.div>
+
+            <motion.button
+              onClick={() => handleAuth('login')} disabled={loading} className="btn btn-primary"
+              whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.55 }}
+            >
               {loading ? <Loader size={20} className="spin" /> : <LogIn size={20} />} Login
-            </button>
-            <button onClick={() => handleAuth('signup')} disabled={loading} className="btn btn-outline">
+            </motion.button>
+            <motion.button
+              onClick={() => handleAuth('signup')} disabled={loading} className="btn btn-outline"
+              whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.62 }}
+            >
               <UserPlus size={20} /> Create Account
-            </button>
-          </div>
+            </motion.button>
+          </motion.div>
         </div>
       </div>
     </div>
@@ -84,30 +159,26 @@ export default function App() {
   const [currentView, setCurrentView] = useState('home');
   const [selectedTournament, setSelectedTournament] = useState(null);
   const [tournaments, setTournaments] = useState([]);
+  const [tournamentsLoading, setTournamentsLoading] = useState(true);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { 
-      setSession(data.session); 
-      setAuthLoading(false); 
+      setSession(data.session); setAuthLoading(false); 
     });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { 
-      setSession(session); 
-    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { setSession(session); });
     return () => listener?.subscription?.unsubscribe();
   }, []);
 
   useEffect(() => {
     if(!session) return;
-    const fetchProfile = async () => {
-      const {data} = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-      setUserProfile(data);
-    };
-    fetchProfile();
+    supabase.from('profiles').select('*').eq('id', session.user.id).single().then(({data}) => setUserProfile(data));
   }, [session]);
 
   const fetchTournaments = async () => {
+    setTournamentsLoading(true);
     const {data} = await supabase.from('tournaments').select('*').order('created_at', {ascending: false});
     setTournaments(data || []);
+    setTournamentsLoading(false);
   };
 
   useEffect(() => {
@@ -117,7 +188,9 @@ export default function App() {
   if (authLoading) return (
     <div className="app-container">
       <div className="mobile-frame" style={{display:'flex', justifyContent:'center', alignItems:'center'}}>
-        <Flame size={50} className="spin" />
+        <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
+          <Flame size={50} style={{ color: 'var(--primary)' }} />
+        </motion.div>
       </div>
     </div>
   );
@@ -138,11 +211,33 @@ export default function App() {
       <div className="mobile-frame">
         <Header balance={userProfile?.balance || 0} user={user} />
         <main className="main-content">
-          {currentView === 'home' && <HomeView tournaments={tournaments} onTournamentSelect={(t) => { setSelectedTournament(t); setCurrentView('tournament'); }} />}
-          {currentView === 'tournament' && <TournamentDetailView tournament={selectedTournament} userProfile={userProfile} setView={setCurrentView} onJoinSuccess={fetchTournaments} />}
-          {currentView === 'wallet' && <WalletView balance={userProfile?.balance || 0} />}
-          {currentView === 'profile' && <ProfileView user={user} profileData={userProfile} />}
-          {currentView === 'admin' && <AdminView isAdmin={isAdmin} tournaments={tournaments} setTournaments={setTournaments} refreshList={fetchTournaments} />}
+          <AnimatePresence mode="wait">
+            {currentView === 'home' && (
+              <motion.div key="home" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+                <HomeView tournaments={tournaments} loading={tournamentsLoading} onTournamentSelect={(t) => { setSelectedTournament(t); setCurrentView('tournament'); }} />
+              </motion.div>
+            )}
+            {currentView === 'tournament' && (
+              <motion.div key="tournament" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+                <TournamentDetailView tournament={selectedTournament} userProfile={userProfile} setView={setCurrentView} onJoinSuccess={fetchTournaments} />
+              </motion.div>
+            )}
+            {currentView === 'wallet' && (
+              <motion.div key="wallet" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+                <WalletView balance={userProfile?.balance || 0} />
+              </motion.div>
+            )}
+            {currentView === 'profile' && (
+              <motion.div key="profile" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+                <ProfileView user={user} profileData={userProfile} />
+              </motion.div>
+            )}
+            {currentView === 'admin' && (
+              <motion.div key="admin" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+                <AdminView isAdmin={isAdmin} tournaments={tournaments} setTournaments={setTournaments} refreshList={fetchTournaments} />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </main>
         <BottomNav currentView={currentView} setView={setCurrentView} isAdmin={isAdmin} />
       </div>
@@ -150,65 +245,127 @@ export default function App() {
   );
 }
 
+// ===== HEADER =====
 function Header({ balance, user }) {
   return (
     <header className="app-header">
       <div className="header-content">
-        <div className="brand">
+        <motion.div className="brand" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.4 }}>
           <Flame size={24} color="#ff4d00" />
           <h1 style={{marginLeft: '8px'}}>CLASH<span className="brand-highlight">ARENA</span></h1>
-        </div>
+        </motion.div>
         <div className="header-actions">
-          <div className="balance-pill"><Wallet size={16} /> ₹{balance}</div>
-          <img src={user.avatar} alt="Avatar" className="header-avatar" />
+          <motion.div
+            className="balance-pill"
+            animate={{ boxShadow: ['0 0 0px rgba(34,197,94,0)', '0 0 14px rgba(34,197,94,0.5)', '0 0 0px rgba(34,197,94,0)'] }}
+            transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+          >
+            <Wallet size={16} /> ₹{balance}
+          </motion.div>
+          <motion.img
+            src={user.avatar} alt="Avatar" className="header-avatar"
+            whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}
+          />
         </div>
       </div>
     </header>
   );
 }
 
-function HomeView({ tournaments, onTournamentSelect }) {
+// ===== HOME VIEW =====
+function HomeView({ tournaments, loading, onTournamentSelect }) {
   return (
     <div className="view home-view">
-      <section className="hero-section">
-        <span className="badge live-badge"><span className="pulse"></span> LIVE NOW</span>
-        <h2>Compete & Win<br/><span className="gradient-text">Real Cash</span></h2>
-      </section>
+      {/* Hero with animated glow */}
+      <div style={{ position: 'relative', marginBottom: '24px' }}>
+        <motion.div
+          className="hero-glow"
+          animate={{ opacity: [0.4, 0.8, 0.4], scale: [1, 1.08, 1] }}
+          transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+        />
+        <section className="hero-section">
+          <motion.span
+            className="badge live-badge"
+            animate={{ opacity: [1, 0.6, 1] }}
+            transition={{ duration: 1.5, repeat: Infinity }}
+          >
+            <span className="pulse"></span> LIVE NOW
+          </motion.span>
+          <motion.h2
+            initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15, duration: 0.5 }}
+          >
+            Compete & Win<br/><span className="gradient-text">Real Cash</span>
+          </motion.h2>
+        </section>
+      </div>
 
-      <section className="stats-row">
-        <div className="stat-card"><Trophy size={28} className="stat-icon" /><div><span className="stat-value">₹5L+</span><span className="stat-label">Prize Pool</span></div></div>
-        <div className="stat-card"><Users size={28} className="stat-icon" /><div><span className="stat-value">{tournaments.length}+</span><span className="stat-label">Matches</span></div></div>
-      </section>
+      {/* Stat cards */}
+      <motion.section className="stats-row" variants={staggerContainer} initial="initial" animate="animate">
+        <motion.div className="stat-card" variants={staggerItem} whileHover="hover" whileTap="tap" custom={cardVariants} style={{ cursor: 'default' }}>
+          <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} transition={{ duration: 0.25 }} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+            <Trophy size={28} className="stat-icon" />
+            <div><span className="stat-value">₹5L+</span><span className="stat-label">Prize Pool</span></div>
+          </motion.div>
+        </motion.div>
+        <motion.div className="stat-card" variants={staggerItem} style={{ cursor: 'default' }}>
+          <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} transition={{ duration: 0.25 }} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+            <Users size={28} className="stat-icon" />
+            <div><span className="stat-value">{tournaments.length}+</span><span className="stat-label">Matches</span></div>
+          </motion.div>
+        </motion.div>
+      </motion.section>
 
+      {/* Tournaments */}
       <section className="section">
         <div className="section-header"><h3>Live Matches</h3></div>
-        {tournaments.length === 0 ? (
-          <p style={{textAlign:'center', color:'#666', padding: '40px'}}>No matches available.</p>
-        ) : tournaments.map(t => (
-          <div key={t.id} className="tournament-card" onClick={() => onTournamentSelect(t)}>
-            <div className="tournament-image" style={{backgroundImage: `url(${t.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800'})`}}>
-              <div className="tournament-overlay">
-                <span className={`status-badge ${t.status}`}>{t.status}</span>
-              </div>
-            </div>
-            <div className="tournament-info">
-              <div className="tournament-header"><h4>{t.name}</h4><span className="prize-tag">₹{t.prize}</span></div>
-              <div className="tournament-meta">
-                <span className="meta-item"><Users size={16} /> {t.current_players || 0}/{t.max_players}</span>
-                <span className="meta-item"><Clock size={16} /> {t.match_time ? new Date(t.match_time).toLocaleDateString() : 'TBA'}</span>
-              </div>
-              <div className="tournament-footer">
-                <span className="mode-badge">{t.mode}</span>
-                <span className="entry-fee">₹{t.entry_fee}</span>
-              </div>
-            </div>
-          </div>
-        ))}
+
+        {loading ? (
+          <motion.div variants={staggerContainer} initial="initial" animate="animate">
+            {[1, 2, 3].map(i => (
+              <motion.div key={i} variants={staggerItem}><TournamentSkeleton /></motion.div>
+            ))}
+          </motion.div>
+        ) : tournaments.length === 0 ? (
+          <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{textAlign:'center', color:'#666', padding: '40px'}}>
+            No matches available.
+          </motion.p>
+        ) : (
+          <motion.div variants={staggerContainer} initial="initial" animate="animate">
+            {tournaments.map(t => (
+              <motion.div
+                key={t.id}
+                className="tournament-card"
+                variants={staggerItem}
+                whileHover={{ scale: 1.03, y: -4, boxShadow: '0 15px 30px rgba(255,77,0,0.18)', borderColor: 'rgba(255,77,0,0.5)', transition: { duration: 0.25 } }}
+                whileTap={{ scale: 0.97, transition: { duration: 0.25 } }}
+                onClick={() => onTournamentSelect(t)}
+              >
+                <div className="tournament-image" style={{backgroundImage: `url(${t.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800'})`}}>
+                  <div className="tournament-overlay">
+                    <span className={`status-badge ${t.status}`}>{t.status}</span>
+                  </div>
+                </div>
+                <div className="tournament-info">
+                  <div className="tournament-header"><h4>{t.name}</h4><span className="prize-tag">₹{t.prize}</span></div>
+                  <div className="tournament-meta">
+                    <span className="meta-item"><Users size={16} /> {t.current_players || 0}/{t.max_players}</span>
+                    <span className="meta-item"><Clock size={16} /> {t.match_time ? new Date(t.match_time).toLocaleDateString() : 'TBA'}</span>
+                  </div>
+                  <div className="tournament-footer">
+                    <span className="mode-badge">{t.mode}</span>
+                    <span className="entry-fee">₹{t.entry_fee}</span>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </motion.div>
+        )}
       </section>
     </div>
   );
 }
 
+// ===== TOURNAMENT DETAIL VIEW =====
 function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess }) {
   const [joining, setJoining] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
@@ -217,56 +374,27 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
 
   useEffect(() => {
     if(!tournament || !userProfile) return;
-    const checkJoin = async () => {
-      const {data} = await supabase.from('match_registrations').select('*')
-        .eq('tournament_id', tournament.id)
-        .eq('user_id', userProfile.id)
-        .single();
-      if(data) setAlreadyJoined(true);
-    };
-    checkJoin();
+    supabase.from('match_registrations').select('*')
+      .eq('tournament_id', tournament.id).eq('user_id', userProfile.id).single()
+      .then(({data}) => { if(data) setAlreadyJoined(true); });
   }, [tournament, userProfile]);
 
   const handleJoin = async () => {
-    if(!joinData.ff_uid || !joinData.ign) {
-      alert("Please enter both FF UID and In-game Name!");
-      return;
-    }
-
-    if(userProfile.balance < tournament.entry_fee) {
-      alert("Insufficient Balance!");
-      return;
-    }
-
+    if(!joinData.ff_uid || !joinData.ign) { alert("Please enter both FF UID and In-game Name!"); return; }
+    if(userProfile.balance < tournament.entry_fee) { alert("Insufficient Balance!"); return; }
     setJoining(true);
     try {
-      // Deduct balance
       const newBal = userProfile.balance - tournament.entry_fee;
       await supabase.from('profiles').update({balance: newBal}).eq('id', userProfile.id);
-
-      // Register with FF details
       const {error} = await supabase.from('match_registrations').insert({
-        tournament_id: tournament.id,
-        user_id: userProfile.id,
-        ff_uid: joinData.ff_uid,
-        ign: joinData.ign,
-        status: 'joined'
+        tournament_id: tournament.id, user_id: userProfile.id,
+        ff_uid: joinData.ff_uid, ign: joinData.ign, status: 'joined'
       });
-
       if(error) throw error;
-
-      // Update count
-      await supabase.from('tournaments').update({
-        current_players: (tournament.current_players || 0) + 1
-      }).eq('id', tournament.id);
-
-      setAlreadyJoined(true);
-      setShowJoinModal(false);
-      alert("✅ Successfully Joined!");
-      onJoinSuccess();
-    } catch(err) {
-      alert("Error: " + err.message);
-    }
+      await supabase.from('tournaments').update({ current_players: (tournament.current_players || 0) + 1 }).eq('id', tournament.id);
+      setAlreadyJoined(true); setShowJoinModal(false);
+      alert("✅ Successfully Joined!"); onJoinSuccess();
+    } catch(err) { alert("Error: " + err.message); }
     setJoining(false);
   };
 
@@ -274,125 +402,188 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
 
   return (
     <div className="view detail-view">
-      <button className="back-btn" onClick={() => setView('home')}>← Back</button>
-      <div className="detail-hero" style={{backgroundImage: `url(${tournament.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800'})`}}>
+      <motion.button
+        className="back-btn" onClick={() => setView('home')}
+        whileTap={{ scale: 0.93 }} whileHover={{ scale: 1.05 }}
+        initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}
+      >← Back</motion.button>
+
+      <motion.div
+        className="detail-hero" style={{backgroundImage: `url(${tournament.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800'})`}}
+        initial={{ opacity: 0, scale: 1.05 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.45 }}
+      >
         <div className="detail-hero-overlay">
           <span className={`status-badge ${tournament.status}`}>{tournament.status}</span>
-          <h2>{tournament.name}</h2>
-          <div className="detail-prize">Prize: ₹{tournament.prize}</div>
+          <motion.h2 initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>{tournament.name}</motion.h2>
+          <motion.div className="detail-prize" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}>Prize: ₹{tournament.prize}</motion.div>
         </div>
-      </div>
+      </motion.div>
 
-      <div className="detail-content">
-        <div className="info-grid">
+      <motion.div className="detail-content" variants={staggerContainer} initial="initial" animate="animate">
+        <motion.div className="info-grid" variants={staggerItem}>
           <div className="info-item"><span className="label">Entry Fee</span><span className="value">₹{tournament.entry_fee}</span></div>
           <div className="info-item"><span className="label">Mode</span><span className="value">{tournament.mode}</span></div>
           <div className="info-item"><span className="label">Players</span><span className="value">{tournament.current_players || 0}/{tournament.max_players}</span></div>
           <div className="info-item"><span className="label">Time</span><span className="value">{tournament.match_time ? new Date(tournament.match_time).toLocaleString() : 'TBA'}</span></div>
-        </div>
+        </motion.div>
 
-        <div style={{background: 'var(--bg-card)', padding: '20px', borderRadius: '16px', marginBottom: '20px'}}>
+        <motion.div variants={staggerItem} style={{background: 'var(--bg-card)', padding: '20px', borderRadius: '16px', marginBottom: '20px'}}>
           <h4 style={{color: 'var(--primary)', marginBottom: '10px'}}>📜 Rules</h4>
           <p style={{whiteSpace: 'pre-line', fontSize: '14px', color: '#ccc'}}>{tournament.rules || 'No rules specified.'}</p>
-        </div>
+        </motion.div>
 
-        {!alreadyJoined ? (
-          <button className="btn btn-primary" onClick={() => setShowJoinModal(true)}>
-            <Trophy size={20} /> Join Tournament (₹{tournament.entry_fee})
-          </button>
-        ) : (
-          <div style={{background: 'rgba(34,197,94,0.1)', border: '1px solid #22c55e', padding: '20px', borderRadius: '16px'}}>
-            <h3 style={{color: '#22c55e', marginBottom: '15px', textAlign: 'center'}}>✅ Registered!</h3>
-            <div className="info-grid" style={{marginBottom: '15px'}}>
-              <div className="info-item"><span className="label">Room ID</span><span className="value">{tournament.room_id || 'Wait...'}</span></div>
-              <div className="info-item"><span className="label">Password</span><span className="value">{tournament.room_password || 'Wait...'}</span></div>
-            </div>
-            <p style={{textAlign: 'center', fontSize: '12px', color: '#888'}}>Room details active 15 mins before match</p>
-          </div>
+        <motion.div variants={staggerItem}>
+          {!alreadyJoined ? (
+            <motion.button className="btn btn-primary" onClick={() => setShowJoinModal(true)} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
+              <Trophy size={20} /> Join Tournament (₹{tournament.entry_fee})
+            </motion.button>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+              style={{background: 'rgba(34,197,94,0.1)', border: '1px solid #22c55e', padding: '20px', borderRadius: '16px'}}
+            >
+              <h3 style={{color: '#22c55e', marginBottom: '15px', textAlign: 'center'}}>✅ Registered!</h3>
+              <div className="info-grid" style={{marginBottom: '15px'}}>
+                <div className="info-item"><span className="label">Room ID</span><span className="value">{tournament.room_id || 'Wait...'}</span></div>
+                <div className="info-item"><span className="label">Password</span><span className="value">{tournament.room_password || 'Wait...'}</span></div>
+              </div>
+              <p style={{textAlign: 'center', fontSize: '12px', color: '#888'}}>Room details active 15 mins before match</p>
+            </motion.div>
+          )}
+        </motion.div>
+      </motion.div>
+
+      {/* Join Modal with AnimatePresence */}
+      <AnimatePresence>
+        {showJoinModal && (
+          <motion.div
+            style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'}}
+            variants={modalBackdrop} initial="initial" animate="animate" exit="exit"
+            onClick={(e) => e.target === e.currentTarget && setShowJoinModal(false)}
+          >
+            <motion.div
+              style={{background: 'var(--bg-card)', padding: '30px', borderRadius: '24px', width: '100%', maxWidth: '350px', border: '1px solid rgba(255,255,255,0.1)'}}
+              variants={modalContent} initial="initial" animate="animate" exit="exit"
+            >
+              <h3 style={{marginBottom: '20px', textAlign: 'center', fontSize: '20px', fontWeight: 800}}>Enter Game Details</h3>
+              <input className="form-input" placeholder="Free Fire UID" value={joinData.ff_uid} onChange={(e) => setJoinData({...joinData, ff_uid: e.target.value})} style={{marginBottom: '15px'}} />
+              <input className="form-input" placeholder="In-Game Name" value={joinData.ign} onChange={(e) => setJoinData({...joinData, ign: e.target.value})} style={{marginBottom: '20px'}} />
+              <motion.button className="btn btn-primary" onClick={handleJoin} disabled={joining} style={{marginBottom: '10px'}} whileTap={{ scale: 0.95 }}>
+                {joining ? <Loader className="spin" size={20}/> : 'Confirm Join'}
+              </motion.button>
+              <motion.button className="btn btn-outline" onClick={() => setShowJoinModal(false)} whileTap={{ scale: 0.95 }}>Cancel</motion.button>
+            </motion.div>
+          </motion.div>
         )}
-      </div>
-
-      {showJoinModal && (
-        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.9)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'}}>
-          <div style={{background: 'var(--bg-card)', padding: '30px', borderRadius: '24px', width: '100%', maxWidth: '350px'}}>
-            <h3 style={{marginBottom: '20px', textAlign: 'center'}}>Enter Game Details</h3>
-            <input className="form-input" placeholder="Free Fire UID" value={joinData.ff_uid} onChange={(e) => setJoinData({...joinData, ff_uid: e.target.value})} style={{marginBottom: '15px'}} />
-            <input className="form-input" placeholder="In-Game Name" value={joinData.ign} onChange={(e) => setJoinData({...joinData, ign: e.target.value})} style={{marginBottom: '20px'}} />
-            <button className="btn btn-primary" onClick={handleJoin} disabled={joining} style={{marginBottom: '10px'}}>
-              {joining ? <Loader className="spin" size={20}/> : 'Confirm Join'}
-            </button>
-            <button className="btn btn-outline" onClick={() => setShowJoinModal(false)}>Cancel</button>
-          </div>
-        </div>
-      )}
+      </AnimatePresence>
     </div>
   );
 }
 
+// ===== WALLET VIEW =====
 function WalletView({ balance }) {
   return (
     <div className="view">
-      <h2 style={{fontSize: '24px', fontWeight: 800, marginBottom: '20px'}}>My Wallet</h2>
-      <div style={{background: 'linear-gradient(135deg, rgba(255,77,0,0.1), rgba(255,215,0,0.1))', border: '1px solid var(--primary)', borderRadius: '24px', padding: '30px', textAlign: 'center'}}>
+      <motion.h2
+        initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+        style={{fontSize: '24px', fontWeight: 800, marginBottom: '20px'}}
+      >My Wallet</motion.h2>
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.1, type: 'spring', stiffness: 200 }}
+        style={{background: 'linear-gradient(135deg, rgba(255,77,0,0.1), rgba(255,215,0,0.1))', border: '1px solid var(--primary)', borderRadius: '24px', padding: '30px', textAlign: 'center'}}
+      >
         <p style={{color: 'var(--text-dim)'}}>Total Balance</p>
-        <h1 style={{color: 'var(--gold)', fontSize: '48px', margin: '10px 0'}}>₹{balance}</h1>
+        <motion.h1
+          initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.2, type: 'spring', stiffness: 200 }}
+          style={{color: 'var(--gold)', fontSize: '48px', margin: '10px 0'}}
+        >₹{balance}</motion.h1>
         <div style={{display: 'flex', gap: '10px', marginTop: '20px'}}>
-          <button className="btn btn-primary" onClick={() => alert("UPI: yourupi@paytm\nSend screenshot on WhatsApp")}>Add Money</button>
-          <button className="btn btn-outline" onClick={() => alert("Min ₹100\nWhatsApp: 9999999999")}>Withdraw</button>
+          <motion.button className="btn btn-primary" onClick={() => alert("UPI: yourupi@paytm\nSend screenshot on WhatsApp")} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>Add Money</motion.button>
+          <motion.button className="btn btn-outline" onClick={() => alert("Min ₹100\nWhatsApp: 9999999999")} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>Withdraw</motion.button>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }
 
+// ===== PROFILE VIEW =====
 function ProfileView({ user, profileData }) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ff_id: user.ff_id, nickname: user.nickname});
 
   const save = async () => {
     await supabase.from('profiles').update(form).eq('id', profileData.id);
-    alert("Updated!");
-    window.location.reload();
+    alert("Updated!"); window.location.reload();
   };
 
   return (
     <div className="view">
-      <div style={{textAlign: 'center', marginBottom: '30px'}}>
-        <img src={user.avatar} alt="Profile" className="profile-avatar-large" />
+      <motion.div
+        style={{textAlign: 'center', marginBottom: '30px'}}
+        initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}
+      >
+        <motion.img
+          src={user.avatar} alt="Profile" className="profile-avatar-large"
+          initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: 'spring', stiffness: 200, delay: 0.1 }}
+          whileHover={{ scale: 1.07 }}
+        />
         <h2 style={{fontSize: '24px', fontWeight: 800}}>{user.nickname || user.name}</h2>
         <span className="status-badge upcoming">Level {user.level}</span>
 
-        {editing ? (
-          <div style={{marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '300px', margin: '20px auto'}}>
-            <input className="form-input" placeholder="FF UID" value={form.ff_id} onChange={(e) => setForm({...form, ff_id: e.target.value})} />
-            <input className="form-input" placeholder="Nickname" value={form.nickname} onChange={(e) => setForm({...form, nickname: e.target.value})} />
-            <button className="btn btn-primary" onClick={save}>Save</button>
-            <button className="btn btn-outline" onClick={() => setEditing(false)}>Cancel</button>
-          </div>
-        ) : (
-          <button className="btn btn-outline" style={{marginTop: '20px', width: 'auto'}} onClick={() => setEditing(true)}>Edit Profile</button>
-        )}
-      </div>
+        <AnimatePresence mode="wait">
+          {editing ? (
+            <motion.div
+              key="edit-form"
+              initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+              style={{marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '300px', margin: '20px auto'}}
+            >
+              <input className="form-input" placeholder="FF UID" value={form.ff_id} onChange={(e) => setForm({...form, ff_id: e.target.value})} />
+              <input className="form-input" placeholder="Nickname" value={form.nickname} onChange={(e) => setForm({...form, nickname: e.target.value})} />
+              <motion.button className="btn btn-primary" onClick={save} whileTap={{ scale: 0.95 }}>Save</motion.button>
+              <motion.button className="btn btn-outline" onClick={() => setEditing(false)} whileTap={{ scale: 0.95 }}>Cancel</motion.button>
+            </motion.div>
+          ) : (
+            <motion.div key="edit-btn" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <motion.button
+                className="btn btn-outline" style={{marginTop: '20px', width: 'auto'}}
+                onClick={() => setEditing(true)} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.03 }}
+              >Edit Profile</motion.button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
 
-      <div className="menu-list">
-        <a href="https://wa.me/919999999999" target="_blank" rel="noreferrer" style={{textDecoration: 'none', color: 'inherit'}}>
-          <div className="menu-item"><MessageCircle size={20} color="#25D366"/> WhatsApp Support <ChevronRight size={16} style={{marginLeft: 'auto'}}/></div>
-        </a>
-        <a href="https://youtube.com/@yourchannel" target="_blank" rel="noreferrer" style={{textDecoration: 'none', color: 'inherit'}}>
-          <div className="menu-item"><Youtube size={20} color="#FF0000"/> YouTube <ChevronRight size={16} style={{marginLeft: 'auto'}}/></div>
-        </a>
-        <a href="https://instagram.com/yourhandle" target="_blank" rel="noreferrer" style={{textDecoration: 'none', color: 'inherit'}}>
-          <div className="menu-item"><Instagram size={20} color="#E1306C"/> Instagram <ChevronRight size={16} style={{marginLeft: 'auto'}}/></div>
-        </a>
-        <div className="menu-item" onClick={async () => { await supabase.auth.signOut(); window.location.reload(); }} style={{color: '#ef4444'}}>
-          <LogOut size={20}/> Logout
-        </div>
-      </div>
+      <motion.div className="menu-list" variants={staggerContainer} initial="initial" animate="animate">
+        {[
+          { href: "https://wa.me/919999999999", icon: <MessageCircle size={20} color="#25D366"/>, label: "WhatsApp Support" },
+          { href: "https://youtube.com/@yourchannel", icon: <Youtube size={20} color="#FF0000"/>, label: "YouTube" },
+          { href: "https://www.instagram.com/agam.visionary__432/?__pwa=1", icon: <Instagram size={20} color="#E1306C"/>, label: "Instagram" }
+        ].map((item, i) => (
+          <motion.div key={i} variants={staggerItem}>
+            <a href={item.href} target="_blank" rel="noreferrer" style={{textDecoration: 'none', color: 'inherit'}}>
+              <motion.div className="menu-item" whileHover={{ scale: 1.03, x: 4 }} whileTap={{ scale: 0.97 }} transition={{ duration: 0.25 }}>
+                {item.icon} {item.label} <ChevronRight size={16} style={{marginLeft: 'auto'}}/>
+              </motion.div>
+            </a>
+          </motion.div>
+        ))}
+        <motion.div variants={staggerItem}>
+          <motion.div
+            className="menu-item" style={{color: '#ef4444'}}
+            onClick={async () => { await supabase.auth.signOut(); window.location.reload(); }}
+            whileHover={{ scale: 1.03, x: 4 }} whileTap={{ scale: 0.97 }} transition={{ duration: 0.25 }}
+          >
+            <LogOut size={20}/> Logout
+          </motion.div>
+        </motion.div>
+      </motion.div>
     </div>
   );
 }
 
-// ================== PROFESSIONAL ADMIN ==================
+// ================== ADMIN ==================
 const EMPTY_FORM = {
   name: '', mode: 'Solo', prize: '', entry_fee: '', max_players: 100,
   status: 'registration', match_time: '', image_url: '', rules: '',
@@ -404,104 +595,96 @@ function TournamentForm({ initial, onSave, onCancel, saving }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-      <input className="form-input" placeholder="Tournament Name *" value={form.name} onChange={e => set('name', e.target.value)} />
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+    <motion.div
+      style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}
+      variants={staggerContainer} initial="initial" animate="animate"
+    >
+      <motion.div variants={staggerItem}>
+        <input className="form-input" placeholder="Tournament Name *" value={form.name} onChange={e => set('name', e.target.value)} />
+      </motion.div>
+      <motion.div variants={staggerItem} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         <input className="form-input" type="number" placeholder="Prize ₹ *" value={form.prize} onChange={e => set('prize', e.target.value)} />
         <input className="form-input" type="number" placeholder="Entry Fee ₹ *" value={form.entry_fee} onChange={e => set('entry_fee', e.target.value)} />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-        <select className="form-input" value={form.mode} onChange={e => { 
-          const mode = e.target.value; 
-          set('mode', mode); 
-          if(mode === '1v1') set('max_players', 2);
-        }}>
-          <option>Solo</option>
-          <option>Duo</option>
-          <option>Squad</option>
-          <option value="1v1">1v1 (2 Players)</option>
+      </motion.div>
+      <motion.div variants={staggerItem} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        <select className="form-input" value={form.mode} onChange={e => { const mode = e.target.value; set('mode', mode); if(mode === '1v1') set('max_players', 2); }}>
+          <option>Solo</option><option>Duo</option><option>Squad</option><option value="1v1">1v1 (2 Players)</option>
         </select>
         <select className="form-input" value={form.status} onChange={e => set('status', e.target.value)}>
-          <option value="registration">Registration</option>
-          <option value="upcoming">Upcoming</option>
-          <option value="live">Live</option>
+          <option value="registration">Registration</option><option value="upcoming">Upcoming</option><option value="live">Live</option>
         </select>
-      </div>
-
-      <input className="form-input" type="number" placeholder="Max Players" value={form.max_players} onChange={e => set('max_players', e.target.value)} disabled={form.mode === '1v1'} />
-      <input className="form-input" type="datetime-local" value={form.match_time} onChange={e => set('match_time', e.target.value)} />
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+      </motion.div>
+      <motion.div variants={staggerItem}>
+        <input className="form-input" type="number" placeholder="Max Players" value={form.max_players} onChange={e => set('max_players', e.target.value)} disabled={form.mode === '1v1'} />
+      </motion.div>
+      <motion.div variants={staggerItem}>
+        <input className="form-input" type="datetime-local" value={form.match_time} onChange={e => set('match_time', e.target.value)} />
+      </motion.div>
+      <motion.div variants={staggerItem} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         <input className="form-input" placeholder="Room ID" value={form.room_id} onChange={e => set('room_id', e.target.value)} />
         <input className="form-input" placeholder="Room Password" value={form.room_password} onChange={e => set('room_password', e.target.value)} />
-      </div>
-
-      <input className="form-input" placeholder="Banner Image URL" value={form.image_url} onChange={e => set('image_url', e.target.value)} />
-      <textarea className="form-input" placeholder="Rules (e.g. No emulator, Level 50+ required...)" rows="4" value={form.rules} onChange={e => set('rules', e.target.value)} style={{resize: 'vertical'}} />
-
-      <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-        <button className="btn btn-primary" onClick={() => onSave(form)} disabled={saving}>
+      </motion.div>
+      <motion.div variants={staggerItem}>
+        <input className="form-input" placeholder="Banner Image URL" value={form.image_url} onChange={e => set('image_url', e.target.value)} />
+      </motion.div>
+      <motion.div variants={staggerItem}>
+        <textarea className="form-input" placeholder="Rules..." rows="4" value={form.rules} onChange={e => set('rules', e.target.value)} style={{resize: 'vertical'}} />
+      </motion.div>
+      <motion.div variants={staggerItem} style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+        <motion.button className="btn btn-primary" onClick={() => onSave(form)} disabled={saving} whileTap={{ scale: 0.95 }}>
           {saving ? <Loader size={16} className="spin" /> : <Plus size={16} />} {saving ? 'Saving...' : 'Save Tournament'}
-        </button>
-        <button className="btn btn-outline" onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
+        </motion.button>
+        <motion.button className="btn btn-outline" onClick={onCancel} whileTap={{ scale: 0.95 }}>Cancel</motion.button>
+      </motion.div>
+    </motion.div>
   );
 }
 
 function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
-  const [view, setView] = useState('dashboard'); // dashboard, create, list, edit
+  const [view, setView] = useState('dashboard');
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
 
-  if (!isAdmin) return <div className="view" style={{textAlign: 'center', paddingTop: '60px'}}><Shield size={56} color="#ef4444" /><h3>Access Denied</h3></div>;
+  if (!isAdmin) return (
+    <div className="view" style={{textAlign: 'center', paddingTop: '60px'}}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring' }}>
+        <Shield size={56} color="#ef4444" />
+        <h3>Access Denied</h3>
+      </motion.div>
+    </div>
+  );
 
   const handleCreate = async (form) => {
     if (!form.name || !form.prize) return alert('Name and Prize required');
     setSaving(true);
     const { data, error } = await supabase.from('tournaments').insert([{
-      ...form,
-      prize: Number(form.prize),
-      entry_fee: Number(form.entry_fee),
-      max_players: Number(form.max_players),
-      match_time: form.match_time || null,
-      image_url: form.image_url || null
+      ...form, prize: Number(form.prize), entry_fee: Number(form.entry_fee),
+      max_players: Number(form.max_players), match_time: form.match_time || null, image_url: form.image_url || null
     }]).select();
     setSaving(false);
     if (error) return alert('Error: ' + error.message);
-    setTournaments([data[0], ...tournaments]);
-    alert('✅ Created!');
-    setView('dashboard');
-    refreshList();
+    setTournaments([data[0], ...tournaments]); alert('✅ Created!');
+    setView('dashboard'); refreshList();
   };
 
   const handleUpdate = async (form) => {
     if (!form.name || !form.prize) return alert('Name and Prize required');
     setSaving(true);
     const { error } = await supabase.from('tournaments').update({
-      ...form,
-      prize: Number(form.prize),
-      entry_fee: Number(form.entry_fee),
-      max_players: Number(form.max_players),
+      ...form, prize: Number(form.prize), entry_fee: Number(form.entry_fee), max_players: Number(form.max_players),
     }).eq('id', editData.id);
     setSaving(false);
     if (error) return alert('Error: ' + error.message);
     setTournaments(tournaments.map(t => t.id === editData.id ? { ...t, ...form } : t));
-    alert('✅ Updated!');
-    setView('list');
-    setEditData(null);
-    refreshList();
+    alert('✅ Updated!'); setView('list'); setEditData(null); refreshList();
   };
 
   const handleDelete = async (id, name) => {
     if (!window.confirm(`Delete "${name}"?`)) return;
     const { error } = await supabase.from('tournaments').delete().eq('id', id);
     if (error) return alert('Error: ' + error.message);
-    setTournaments(tournaments.filter(t => t.id !== id));
-    refreshList();
+    setTournaments(tournaments.filter(t => t.id !== id)); refreshList();
   };
 
   const openEdit = (t) => {
@@ -516,14 +699,13 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
     registration: tournaments.filter(t => t.status === 'registration').length
   };
 
-  const filtered = tournaments.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
-
   const statusColor = { live: '#ef4444', upcoming: '#3b82f6', registration: '#22c55e', completed: '#888' };
+  const filtered = tournaments.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
 
   if (view === 'create') return (
     <div className="view">
       <div style={{display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px'}}>
-        <button onClick={() => setView('dashboard')} style={{background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px'}}>←</button>
+        <motion.button onClick={() => setView('dashboard')} style={{background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px'}} whileTap={{ scale: 0.9 }}>←</motion.button>
         <h2 style={{fontSize: '20px', fontWeight: 800}}>Create Tournament</h2>
       </div>
       <TournamentForm onSave={handleCreate} onCancel={() => setView('dashboard')} saving={saving} />
@@ -533,7 +715,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
   if (view === 'edit') return (
     <div className="view">
       <div style={{display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px'}}>
-        <button onClick={() => setView('list')} style={{background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px'}}>←</button>
+        <motion.button onClick={() => setView('list')} style={{background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px'}} whileTap={{ scale: 0.9 }}>←</motion.button>
         <h2 style={{fontSize: '20px', fontWeight: 800}}>Edit Tournament</h2>
       </div>
       <TournamentForm initial={editData} onSave={handleUpdate} onCancel={() => { setView('list'); setEditData(null); }} saving={saving} />
@@ -543,17 +725,19 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
   if (view === 'list') return (
     <div className="view">
       <div style={{display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px'}}>
-        <button onClick={() => setView('dashboard')} style={{background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px'}}>←</button>
+        <motion.button onClick={() => setView('dashboard')} style={{background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px'}} whileTap={{ scale: 0.9 }}>←</motion.button>
         <h2 style={{fontSize: '20px', fontWeight: 800}}>Manage Tournaments</h2>
       </div>
-
-      <input style={{background: '#0d0d14', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '12px', color: 'white', width: '100%', marginBottom: '16px'}} 
+      <input style={{background: '#0d0d14', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '12px', color: 'white', width: '100%', marginBottom: '16px'}}
         placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} />
-
-      <div style={{display: 'flex', flexDirection: 'column', gap: '12px'}}>
+      <motion.div style={{display: 'flex', flexDirection: 'column', gap: '12px'}} variants={staggerContainer} initial="initial" animate="animate">
         {filtered.length === 0 && <p style={{color: '#666', textAlign: 'center'}}>No tournaments found.</p>}
         {filtered.map(t => (
-          <div key={t.id} style={{background: '#16161f', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '16px', padding: '16px', borderLeft: `3px solid ${statusColor[t.status] || '#888'}`}}>
+          <motion.div
+            key={t.id} variants={staggerItem}
+            whileHover={{ scale: 1.02, x: 3 }} whileTap={{ scale: 0.98 }} transition={{ duration: 0.25 }}
+            style={{background: '#16161f', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '16px', padding: '16px', borderLeft: `3px solid ${statusColor[t.status] || '#888'}`}}
+          >
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px'}}>
               <div>
                 <h4 style={{fontSize: '15px', fontWeight: 700}}>{t.name}</h4>
@@ -561,59 +745,68 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
                 <span style={{fontSize: '12px', color: 'var(--text-dim)', marginLeft: '10px'}}>{t.current_players || 0}/{t.max_players} joined</span>
               </div>
               <div style={{display: 'flex', gap: '8px'}}>
-                <button onClick={() => openEdit(t)} style={{background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#3b82f6', borderRadius: '8px', padding: '6px 10px'}}><Edit size={14} /></button>
-                <button onClick={() => handleDelete(t.id, t.name)} style={{background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: '8px', padding: '6px 10px'}}><Trash2 size={14} /></button>
+                <motion.button onClick={() => openEdit(t)} style={{background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#3b82f6', borderRadius: '8px', padding: '6px 10px'}} whileTap={{ scale: 0.9 }}><Edit size={14} /></motion.button>
+                <motion.button onClick={() => handleDelete(t.id, t.name)} style={{background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: '8px', padding: '6px 10px'}} whileTap={{ scale: 0.9 }}><Trash2 size={14} /></motion.button>
               </div>
             </div>
             <div style={{fontSize: '13px', color: 'var(--text-dim)'}}>₹{t.prize} Prize • Entry ₹{t.entry_fee}</div>
             {t.room_id && <div style={{fontSize: '12px', color: '#facc15', marginTop: '4px'}}>Room: {t.room_id}</div>}
-          </div>
+          </motion.div>
         ))}
-      </div>
+      </motion.div>
     </div>
   );
 
+  // Dashboard
+  const adminStats = [
+    { value: stats.total, label: 'Total Tournaments', color: 'var(--primary)', bg: 'rgba(255,77,0,0.2)', border: 'rgba(255,77,0,0.3)' },
+    { value: stats.live, label: 'Live Now', color: '#22c55e', bg: 'rgba(34,197,94,0.2)', border: 'rgba(34,197,94,0.3)' },
+    { value: stats.upcoming, label: 'Upcoming', color: '#3b82f6', bg: 'rgba(59,130,246,0.2)', border: 'rgba(59,130,246,0.3)' },
+    { value: stats.registration, label: 'Open Reg', color: '#f59e0b', bg: 'rgba(245,158,11,0.2)', border: 'rgba(245,158,11,0.3)' },
+  ];
+
   return (
     <div className="view">
-      <h2 style={{fontSize: '24px', fontWeight: 800, marginBottom: '20px'}}>Admin Dashboard</h2>
+      <motion.h2 initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} style={{fontSize: '24px', fontWeight: 800, marginBottom: '20px'}}>
+        Admin Dashboard
+      </motion.h2>
 
-      <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px'}}>
-        <div style={{background: 'linear-gradient(135deg, rgba(255,77,0,0.2), #16161f)', border: '1px solid rgba(255,77,0,0.3)', borderRadius: '16px', padding: '18px'}}>
-          <div style={{fontSize: '28px', fontWeight: 800, color: 'var(--primary)'}}>{stats.total}</div>
-          <div style={{fontSize: '12px', color: 'var(--text-dim)'}}>Total Tournaments</div>
-        </div>
-        <div style={{background: 'linear-gradient(135deg, rgba(34,197,94,0.2), #16161f)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: '16px', padding: '18px'}}>
-          <div style={{fontSize: '28px', fontWeight: 800, color: '#22c55e'}}>{stats.live}</div>
-          <div style={{fontSize: '12px', color: 'var(--text-dim)'}}>Live Now</div>
-        </div>
-        <div style={{background: 'linear-gradient(135deg, rgba(59,130,246,0.2), #16161f)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '16px', padding: '18px'}}>
-          <div style={{fontSize: '28px', fontWeight: 800, color: '#3b82f6'}}>{stats.upcoming}</div>
-          <div style={{fontSize: '12px', color: 'var(--text-dim)'}}>Upcoming</div>
-        </div>
-        <div style={{background: 'linear-gradient(135deg, rgba(245,158,11,0.2), #16161f)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '16px', padding: '18px'}}>
-          <div style={{fontSize: '28px', fontWeight: 800, color: '#f59e0b'}}>{stats.registration}</div>
-          <div style={{fontSize: '12px', color: 'var(--text-dim)'}}>Open Reg</div>
-        </div>
-      </div>
+      <motion.div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px'}} variants={staggerContainer} initial="initial" animate="animate">
+        {adminStats.map((s, i) => (
+          <motion.div
+            key={i} variants={staggerItem}
+            whileHover={{ scale: 1.05, y: -3 }} whileTap={{ scale: 0.97 }} transition={{ duration: 0.25 }}
+            style={{background: `linear-gradient(135deg, ${s.bg}, #16161f)`, border: `1px solid ${s.border}`, borderRadius: '16px', padding: '18px', cursor: 'default'}}
+          >
+            <div style={{fontSize: '28px', fontWeight: 800, color: s.color}}>{s.value}</div>
+            <div style={{fontSize: '12px', color: 'var(--text-dim)'}}>{s.label}</div>
+          </motion.div>
+        ))}
+      </motion.div>
 
-      <div style={{display: 'flex', flexDirection: 'column', gap: '12px'}}>
-        <button className="btn btn-primary" onClick={() => setView('create')}><Plus size={18} /> Create New Tournament</button>
-        <button className="btn btn-outline" onClick={() => setView('list')}><Settings size={18} /> Manage All ({tournaments.length})</button>
-      </div>
+      <motion.div style={{display: 'flex', flexDirection: 'column', gap: '12px'}} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+        <motion.button className="btn btn-primary" onClick={() => setView('create')} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}><Plus size={18} /> Create New Tournament</motion.button>
+        <motion.button className="btn btn-outline" onClick={() => setView('list')} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}><Settings size={18} /> Manage All ({tournaments.length})</motion.button>
+      </motion.div>
 
       <h3 style={{marginTop: '24px', marginBottom: '12px', fontSize: '16px', color: 'var(--text-dim)'}}>Recent</h3>
-      <div style={{display: 'flex', flexDirection: 'column', gap: '10px'}}>
+      <motion.div style={{display: 'flex', flexDirection: 'column', gap: '10px'}} variants={staggerContainer} initial="initial" animate="animate">
         {tournaments.slice(0, 3).map(t => (
-          <div key={t.id} style={{background: '#16161f', padding: '12px 16px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+          <motion.div
+            key={t.id} variants={staggerItem}
+            whileHover={{ scale: 1.02, x: 4 }} whileTap={{ scale: 0.98 }} transition={{ duration: 0.25 }}
+            style={{background: '#16161f', padding: '12px 16px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}
+          >
             <span style={{fontWeight: 600}}>{t.name}</span>
             <span style={{fontSize: '12px', color: statusColor[t.status]}}>{t.status}</span>
-          </div>
+          </motion.div>
         ))}
-      </div>
+      </motion.div>
     </div>
   );
 }
 
+// ===== BOTTOM NAV =====
 function BottomNav({ currentView, setView, isAdmin }) {
   const tabs = [
     { id: 'home', icon: Home, label: 'Home' },
@@ -621,12 +814,34 @@ function BottomNav({ currentView, setView, isAdmin }) {
     { id: 'wallet', icon: Wallet, label: 'Wallet' },
     { id: 'profile', icon: User, label: 'Profile' }
   ];
+
   return (
     <nav className="bottom-nav">
       {tabs.map(t => (
-        <button key={t.id} className={`nav-item ${currentView === t.id ? 'active' : ''}`} onClick={() => setView(t.id)}>
-          <t.icon size={22} /><span>{t.label}</span>
-        </button>
+        <motion.button
+          key={t.id}
+          className={`nav-item ${currentView === t.id ? 'active' : ''}`}
+          onClick={() => setView(t.id)}
+          whileTap={{ scale: 0.85 }}
+          animate={currentView === t.id ? { y: -4 } : { y: 0 }}
+          transition={{ duration: 0.25 }}
+        >
+          <motion.div
+            animate={currentView === t.id ? { filter: 'drop-shadow(0 0 8px rgba(255,77,0,0.7))' } : { filter: 'none' }}
+            transition={{ duration: 0.3 }}
+          >
+            <t.icon size={22} />
+          </motion.div>
+          <span>{t.label}</span>
+          {currentView === t.id && (
+            <motion.div
+              className="nav-active-dot"
+              layoutId="nav-indicator"
+              initial={{ scale: 0 }} animate={{ scale: 1 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+            />
+          )}
+        </motion.button>
       ))}
     </nav>
   );

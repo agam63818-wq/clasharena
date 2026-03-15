@@ -162,20 +162,19 @@ export default function App() {
   const [tournamentsLoading, setTournamentsLoading] = useState(true);
 
   useEffect(() => {
-    // Single source of truth - onAuthStateChange handles initial session too
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, sess) => {
-      setSession(sess);
-      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
-        setAuthLoading(false);
-        if (!sess) return;
-      }
-      if (event === 'SIGNED_OUT') {
-        setUserProfile(null);
-        setCurrentView('home');
-        setTournaments([]);
-        setAuthLoading(false);
-      }
-    });
+    const loadSession = async () => {
+      const { data } = await supabase.auth.getSession();
+      setSession(data.session);
+      setAuthLoading(false);
+    };
+
+    loadSession();
+
+    const { data: { subscription } } =
+      supabase.auth.onAuthStateChange((_event, session) => {
+        setSession(session);
+      });
+
     return () => subscription.unsubscribe();
   }, []);
 
@@ -197,8 +196,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    if(session) fetchTournaments();
-  }, [session]);
+    if (session?.user?.id) {
+      fetchTournaments();
+    }
+  }, [session?.user?.id]);
 
   if (authLoading) return (
     <div className="app-container">
@@ -248,7 +249,10 @@ export default function App() {
                   user={user} 
                   profileData={userProfile}
                   onProfileUpdate={() => fetchProfile(session.user.id)}
-                  onLogout={async () => { await supabase.auth.signOut(); }}
+                  onLogout={async () => {
+                    await supabase.auth.signOut();
+                    setSession(null);
+                  }}
                 />
               </motion.div>
             )}

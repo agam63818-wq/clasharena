@@ -64,7 +64,7 @@ function TournamentSkeleton() {
 }
 
 // ================== LOGIN SCREEN ==================
-function LoginScreen() {
+function LoginScreen({ onLogin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -73,9 +73,9 @@ function LoginScreen() {
     setLoading(true);
     try {
       if (type === 'login') {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        window.location.reload();
+        onLogin(data.session); // ✅ State update, no reload
       } else {
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
@@ -162,17 +162,32 @@ export default function App() {
   const [tournamentsLoading, setTournamentsLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => { 
-      setSession(data.session); setAuthLoading(false); 
+    // Single source of truth - onAuthStateChange handles initial session too
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, sess) => {
+      setSession(sess);
+      if (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') {
+        setAuthLoading(false);
+        if (!sess) return;
+      }
+      if (event === 'SIGNED_OUT') {
+        setUserProfile(null);
+        setCurrentView('home');
+        setTournaments([]);
+        setAuthLoading(false);
+      }
     });
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => { setSession(session); });
-    return () => listener?.subscription?.unsubscribe();
+    return () => subscription.unsubscribe();
   }, []);
 
+  const fetchProfile = async (userId) => {
+    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    setUserProfile(data);
+  };
+
   useEffect(() => {
-    if(!session) return;
-    supabase.from('profiles').select('*').eq('id', session.user.id).single().then(({data}) => setUserProfile(data));
-  }, [session]);
+    if (!session?.user?.id) return;
+    fetchProfile(session.user.id);
+  }, [session?.user?.id]);
 
   const fetchTournaments = async () => {
     setTournamentsLoading(true);
@@ -195,7 +210,7 @@ export default function App() {
     </div>
   );
 
-  if (!session) return <LoginScreen />;
+  if (!session) return <LoginScreen onLogin={(sess) => setSession(sess)} />;
 
   const isAdmin = userProfile?.role === 'admin';
   const user = {
@@ -229,7 +244,12 @@ export default function App() {
             )}
             {currentView === 'profile' && (
               <motion.div key="profile" variants={pageVariants} initial="initial" animate="animate" exit="exit">
-                <ProfileView user={user} profileData={userProfile} />
+                <ProfileView 
+                  user={user} 
+                  profileData={userProfile}
+                  onProfileUpdate={() => fetchProfile(session.user.id)}
+                  onLogout={async () => { await supabase.auth.signOut(); }}
+                />
               </motion.div>
             )}
             {currentView === 'admin' && (
@@ -508,13 +528,17 @@ function WalletView({ balance }) {
 }
 
 // ===== PROFILE VIEW =====
-function ProfileView({ user, profileData }) {
+function ProfileView({ user, profileData, onProfileUpdate, onLogout }) {
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ff_id: user.ff_id, nickname: user.nickname});
 
   const save = async () => {
+    setSaving(true);
     await supabase.from('profiles').update(form).eq('id', profileData.id);
-    alert("Updated!"); window.location.reload();
+    setSaving(false);
+    setEditing(false);
+    onProfileUpdate(); // ✅ refresh profile in parent, no reload
   };
 
   return (
@@ -541,7 +565,9 @@ function ProfileView({ user, profileData }) {
             >
               <input className="form-input" placeholder="FF UID" value={form.ff_id} onChange={(e) => setForm({...form, ff_id: e.target.value})} />
               <input className="form-input" placeholder="Nickname" value={form.nickname} onChange={(e) => setForm({...form, nickname: e.target.value})} />
-              <motion.button className="btn btn-primary" onClick={save} whileTap={{ scale: 0.95 }}>Save</motion.button>
+              <motion.button className="btn btn-primary" onClick={save} disabled={saving} whileTap={{ scale: 0.95 }}>
+                {saving ? <Loader size={16} className="spin" /> : 'Save'}
+              </motion.button>
               <motion.button className="btn btn-outline" onClick={() => setEditing(false)} whileTap={{ scale: 0.95 }}>Cancel</motion.button>
             </motion.div>
           ) : (
@@ -572,7 +598,7 @@ function ProfileView({ user, profileData }) {
         <motion.div variants={staggerItem}>
           <motion.div
             className="menu-item" style={{color: '#ef4444'}}
-            onClick={async () => { await supabase.auth.signOut(); window.location.reload(); }}
+            onClick={() => onLogout()}
             whileHover={{ scale: 1.03, x: 4 }} whileTap={{ scale: 0.97 }} transition={{ duration: 0.25 }}
           >
             <LogOut size={20}/> Logout

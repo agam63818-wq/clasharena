@@ -408,8 +408,23 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
     if(userProfile.balance < tournament.entry_fee) { alert("Insufficient Balance!"); return; }
     setJoining(true);
     try {
-      const newBal = userProfile.balance - tournament.entry_fee;
-      await supabase.from('profiles').update({balance: newBal}).eq('id', userProfile.id);
+      const response = await fetch("/api/joinTournament", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          userId: userProfile.id,
+          tournamentId: tournament.id,
+          entryFee: tournament.entry_fee
+        })
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Join failed");
+      }
       const {error} = await supabase.from('match_registrations').insert({
         tournament_id: tournament.id, user_id: userProfile.id,
         ff_uid: joinData.ff_uid, ign: joinData.ign, status: 'joined'
@@ -506,6 +521,19 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
 
 // ===== WALLET VIEW =====
 function WalletView({ balance }) {
+  const [transactions, setTransactions] = useState([]);
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      const { data } = await supabase
+        .from('transactions')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      setTransactions(data || []);
+    };
+
+    fetchTransactions();
+  }, []);
   return (
     <div className="view">
       <motion.h2
@@ -527,6 +555,32 @@ function WalletView({ balance }) {
           <motion.button className="btn btn-outline" onClick={() => alert("Min ₹100\nWhatsApp: 9999999999")} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>Withdraw</motion.button>
         </div>
       </motion.div>
+      <div style={{marginTop: '20px'}}>
+        <h3 style={{marginBottom: '10px'}}>Transactions</h3>
+
+        {transactions.length === 0 ? (
+          <p style={{color:'#666'}}>No transactions</p>
+        ) : (
+          transactions.map(tx => (
+            <div key={tx.id} style={{
+              background:'#16161f',
+              padding:'12px',
+              borderRadius:'10px',
+              marginBottom:'8px'
+            }}>
+              <div style={{display:'flex', justifyContent:'space-between'}}>
+                <span>{tx.type}</span>
+                <span style={{color: tx.amount < 0 ? 'red' : 'green'}}>
+                  ₹{tx.amount}
+                </span>
+              </div>
+              <small style={{color:'#888'}}>
+                {new Date(tx.created_at).toLocaleString()}
+              </small>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }
@@ -690,7 +744,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
     setSaving(true);
     const { data, error } = await supabase.from('tournaments').insert([{
       ...form, prize: Number(form.prize), entry_fee: Number(form.entry_fee),
-      max_players: Number(form.max_players), match_time: form.match_time || null, image_url: form.image_url || null
+      max_players: Number(form.max_players),match_time: form.match_time ? new Date(form.match_time).toISOString() : null, image_url: form.image_url || null
     }]).select();
     setSaving(false);
     if (error) return alert('Error: ' + error.message);

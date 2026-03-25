@@ -995,21 +995,31 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
             </div>
             <div style={{fontSize: '13px', color: 'var(--text-dim)'}}>₹{t.prize} Prize • Entry ₹{t.entry_fee}</div>
             <div style={{fontSize: '12px', color: '#aaa', marginTop: '2px'}}>Match: {formatMatchDateTime(t.match_time)}</div>
-            {(registrationsByTournament[t.id] || []).length > 0 && (
-              <div style={{marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px'}}>
-                {(registrationsByTournament[t.id] || []).slice(0, 5).map((player) => (
-                  <div key={player.id} style={{fontSize: '11px', color: '#9ca3af'}}>
-                    {player.profiles?.username || 'player'} • UID: {player.ff_uid || '-'} • IGN: {player.ign || '-'}
-                  </div>
-                ))}
-              </div>
-            )}
-            {t.room_id && <div style={{fontSize: '12px', color: '#facc15', marginTop: '4px'}}>Room: {t.room_id}</div>}
-          </motion.div>
-        ))}
-      </motion.div>
-    </div>
-  );
+            {(registrationsByTournament[t.id] || []).length === 0 ? (
+  <div style={{ color: '#9ca3af', fontSize: '13px', marginTop: '8px' }}>
+    No players joined yet
+  </div>
+) : (
+  <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+    {(registrationsByTournament[t.id] || []).map((player) => (
+      <div key={player.id} style={{
+        background: '#0f0f17',
+        padding: '8px',
+        borderRadius: '8px'
+      }}>
+        <div style={{ color: '#fff', fontSize: '13px' }}>
+          👤 {player.profiles?.username || 'player'}
+        </div>
+        <div style={{ color: '#9ca3af', fontSize: '12px' }}>
+          🎮 UID: {player.ff_uid || '-'}
+        </div>
+        <div style={{ color: '#9ca3af', fontSize: '12px' }}>
+          🏷 IGN: {player.ign || '-'}
+        </div>
+      </div>
+    ))}
+  </div>
+)}
 
   // Dashboard
   const adminStats = [

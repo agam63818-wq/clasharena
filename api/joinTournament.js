@@ -88,7 +88,10 @@ export default async function handler(req, res) {
       });
 
     if (regErr) {
-      return res.status(500).json({ error: regErr.message });
+      if (regErr.code === '23505') {
+        return res.status(409).json({ error: 'Already joined', code: '23505' });
+      }
+      return res.status(500).json({ error: 'Could not complete registration' });
     }
 
     // 7. increment player count
@@ -113,6 +116,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ success: true });
 
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Server error while joining tournament' });
   }
 }

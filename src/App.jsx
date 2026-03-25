@@ -434,19 +434,48 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [alreadyJoined, setAlreadyJoined] = useState(false);
   const [joinData, setJoinData] = useState({ff_uid: '', ign: ''});
+  const [joinMessage, setJoinMessage] = useState('');
+  const [joinMessageType, setJoinMessageType] = useState('');
 
   useEffect(() => {
     if(!tournament || !userProfile) return;
-    supabase.from('match_registrations').select('*')
-      .eq('tournament_id', tournament.id).eq('user_id', userProfile.id).single()
+    setAlreadyJoined(false);
+    supabase.from('match_registrations').select('id')
+      .eq('tournament_id', tournament.id).eq('user_id', userProfile.id).maybeSingle()
       .then(({data}) => { if(data) setAlreadyJoined(true); });
   }, [tournament, userProfile]);
 
   const handleJoin = async () => {
-    if(!joinData.ff_uid || !joinData.ign) { alert("Please enter both FF UID and In-game Name!"); return; }
-    if(userProfile.balance < tournament.entry_fee) { alert("Insufficient Balance!"); return; }
+    if (joining) return;
+    setJoinMessage('');
+    setJoinMessageType('');
+    if (!joinData.ff_uid || !joinData.ign) {
+      setJoinMessage('Please enter both FF UID and In-game Name.');
+      setJoinMessageType('error');
+      return;
+    }
+    if (userProfile.balance < tournament.entry_fee) {
+      setJoinMessage('Insufficient balance for this match.');
+      setJoinMessageType('error');
+      return;
+    }
     setJoining(true);
     try {
+      const { data: existingRegistration } = await supabase
+        .from('match_registrations')
+        .select('id')
+        .eq('tournament_id', tournament.id)
+        .eq('user_id', userProfile.id)
+        .maybeSingle();
+
+      if (existingRegistration) {
+        setAlreadyJoined(true);
+        setShowJoinModal(false);
+        setJoinMessage('You already joined this match.');
+        setJoinMessageType('success');
+        return;
+      }
+
       const response = await fetch("/api/joinTournament", {
         method: "POST",
         headers: {
@@ -464,12 +493,25 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Join failed");
+        if (result?.code === '23505') {
+          setAlreadyJoined(true);
+          setShowJoinModal(false);
+          setJoinMessage('Already joined.');
+          setJoinMessageType('success');
+          return;
+        }
+        throw new Error(result.error || "Unable to join match right now.");
       }
       setAlreadyJoined(true); setShowJoinModal(false);
-      alert("✅ Successfully Joined!"); onJoinSuccess();
-    } catch(err) { alert("Error: " + err.message); }
-    setJoining(false);
+      setJoinMessage('Successfully joined this match.');
+      setJoinMessageType('success');
+      onJoinSuccess();
+    } catch(err) {
+      setJoinMessage(err?.message || 'Unable to join match right now.');
+      setJoinMessageType('error');
+    } finally {
+      setJoining(false);
+    }
   };
 
   if (!tournament) return null;
@@ -494,6 +536,23 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
       </motion.div>
 
       <motion.div className="detail-content" variants={staggerContainer} initial="initial" animate="animate">
+        {joinMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            style={{
+              marginBottom: '12px',
+              borderRadius: '10px',
+              padding: '10px 12px',
+              fontSize: '13px',
+              border: joinMessageType === 'success' ? '1px solid #22c55e' : '1px solid #ef4444',
+              background: joinMessageType === 'success' ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+              color: joinMessageType === 'success' ? '#86efac' : '#fca5a5'
+            }}
+          >
+            {joinMessage}
+          </motion.div>
+        )}
         <motion.div className="info-grid" variants={staggerItem}>
           <div className="info-item"><span className="label">Entry Fee</span><span className="value">₹{tournament.entry_fee}</span></div>
           <div className="info-item"><span className="label">Mode</span><span className="value">{tournament.mode}</span></div>
@@ -508,7 +567,7 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
 
         <motion.div variants={staggerItem}>
           {!alreadyJoined ? (
-            <motion.button className="btn btn-primary" onClick={() => setShowJoinModal(true)} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
+            <motion.button className="btn btn-primary" onClick={() => setShowJoinModal(true)} disabled={joining || alreadyJoined} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
               <Trophy size={20} /> Join Tournament (₹{tournament.entry_fee})
             </motion.button>
           ) : (

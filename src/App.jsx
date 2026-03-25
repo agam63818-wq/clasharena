@@ -12,21 +12,14 @@ const formatMatchDateTime = (value, fallback = 'TBA') => {
   if (!value) return fallback;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return fallback;
-  return parsed.toLocaleString([], {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+  return parsed.toLocaleString();
 };
 
 const toDatetimeLocalInput = (value) => {
   if (!value) return '';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return '';
-  const tzOffsetMs = parsed.getTimezoneOffset() * 60000;
-  return new Date(parsed.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+  return parsed.toISOString().slice(0, 16);
 };
 
 // ===== ANIMATION VARIANTS =====
@@ -473,7 +466,6 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
       if (!response.ok) {
         throw new Error(result.error || "Join failed");
       }
-      await supabase.from('tournaments').update({ current_players: (tournament.current_players || 0) + 1 }).eq('id', tournament.id);
       setAlreadyJoined(true); setShowJoinModal(false);
       alert("✅ Successfully Joined!"); onJoinSuccess();
     } catch(err) { alert("Error: " + err.message); }
@@ -745,7 +737,13 @@ function TournamentForm({ initial, onSave, onCancel, saving }) {
         <input className="form-input" type="number" placeholder="Max Players" value={form.max_players} onChange={e => set('max_players', e.target.value)} disabled={form.mode === '1v1'} />
       </motion.div>
       <motion.div variants={staggerItem}>
-        <input className="form-input" type="datetime-local" value={form.match_time} onChange={e => set('match_time', e.target.value)} />
+        <input
+          className="form-input"
+          type="datetime-local"
+          value={form.match_time}
+          onChange={e => set('match_time', e.target.value)}
+          onFocus={(e) => e.target.showPicker?.()}
+        />
       </motion.div>
       <motion.div variants={staggerItem} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         <input className="form-input" placeholder="Room ID" value={form.room_id} onChange={e => set('room_id', e.target.value)} />
@@ -772,6 +770,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
+  const [registrationsByTournament, setRegistrationsByTournament] = useState({});
 
   if (!isAdmin) return (
     <div className="view" style={{textAlign: 'center', paddingTop: '60px'}}>
@@ -782,8 +781,30 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
     </div>
   );
 
+  useEffect(() => {
+    const loadRegistrations = async () => {
+      const { data, error } = await supabase
+        .from('match_registrations')
+        .select('id, tournament_id, ff_uid, ign, profiles(username)')
+        .order('created_at', { ascending: false });
+
+      if (error) return;
+
+      const grouped = (data || []).reduce((acc, row) => {
+        if (!acc[row.tournament_id]) acc[row.tournament_id] = [];
+        acc[row.tournament_id].push(row);
+        return acc;
+      }, {});
+
+      setRegistrationsByTournament(grouped);
+    };
+
+    loadRegistrations();
+  }, [tournaments]);
+
   const handleCreate = async (form) => {
     if (!form.name || !form.prize) return alert('Name and Prize required');
+    if (!form.match_time) return alert('Match time is required');
     if (Number(form.max_players) < 2) return alert('Max players must be at least 2');
     setSaving(true);
     const { data, error } = await supabase.from('tournaments').insert([{
@@ -798,6 +819,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
 
   const handleUpdate = async (form) => {
     if (!form.name || !form.prize) return alert('Name and Prize required');
+    if (!form.match_time) return alert('Match time is required');
     if (Number(form.max_players) < 2) return alert('Max players must be at least 2');
     setSaving(true);
     const { error } = await supabase.from('tournaments').update({
@@ -821,7 +843,11 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
     const result = await response.json();
     if (!response.ok) return alert('Error: ' + (result.error || 'Delete failed'));
 
-    setTournaments(tournaments.filter(t => t.id !== id)); refreshList();
+    setTournaments(tournaments.filter(t => t.id !== id));
+    const newRegistrationMap = { ...registrationsByTournament };
+    delete newRegistrationMap[id];
+    setRegistrationsByTournament(newRegistrationMap);
+    refreshList();
   };
 
   const openEdit = (t) => {
@@ -888,6 +914,15 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
             </div>
             <div style={{fontSize: '13px', color: 'var(--text-dim)'}}>₹{t.prize} Prize • Entry ₹{t.entry_fee}</div>
             <div style={{fontSize: '12px', color: '#aaa', marginTop: '2px'}}>Match: {formatMatchDateTime(t.match_time)}</div>
+            {(registrationsByTournament[t.id] || []).length > 0 && (
+              <div style={{marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px'}}>
+                {(registrationsByTournament[t.id] || []).slice(0, 5).map((player) => (
+                  <div key={player.id} style={{fontSize: '11px', color: '#9ca3af'}}>
+                    {player.profiles?.username || 'player'} • UID: {player.ff_uid || '-'} • IGN: {player.ign || '-'}
+                  </div>
+                ))}
+              </div>
+            )}
             {t.room_id && <div style={{fontSize: '12px', color: '#facc15', marginTop: '4px'}}>Room: {t.room_id}</div>}
           </motion.div>
         ))}

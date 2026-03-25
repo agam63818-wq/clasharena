@@ -13,11 +13,27 @@ export default async function handler(req, res) {
   try {
     const { userId, tournamentId, entryFee, ff_uid, ign } = req.body;
 
-    if (!userId || !tournamentId) {
+    if (!userId || !tournamentId || !ff_uid || !ign) {
       return res.status(400).json({ error: 'Missing data' });
     }
 
-    // 1. get profile
+    // 1. check duplicate join
+    const { data: existingRegistration, error: existingRegistrationError } = await supabase
+      .from('match_registrations')
+      .select('id')
+      .eq('tournament_id', tournamentId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (existingRegistrationError) {
+      return res.status(500).json({ error: existingRegistrationError.message });
+    }
+
+    if (existingRegistration) {
+      return res.status(400).json({ error: 'You already joined this tournament' });
+    }
+
+    // 2. get profile
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
       .select('balance')
@@ -28,14 +44,29 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: profileError.message });
     }
 
-    // 2. balance check
+    // 3. tournament capacity check
+    const { data: tournament, error: tournamentError } = await supabase
+      .from('tournaments')
+      .select('id, current_players, max_players')
+      .eq('id', tournamentId)
+      .single();
+
+    if (tournamentError) {
+      return res.status(500).json({ error: tournamentError.message });
+    }
+
+    if ((tournament.current_players || 0) >= tournament.max_players) {
+      return res.status(400).json({ error: 'Tournament is full' });
+    }
+
+    // 4. balance check
     if (profile.balance < entryFee) {
       return res.status(400).json({ error: 'Insufficient balance' });
     }
 
     const newBalance = profile.balance - entryFee;
 
-    // 3. update balance
+    // 5. update balance
     const { error: balErr } = await supabase
       .from('profiles')
       .update({ balance: newBalance })
@@ -45,7 +76,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: balErr.message });
     }
 
-    // 4. insert registration
+    // 6. insert registration
     const { error: regErr } = await supabase
       .from('match_registrations')
       .insert({
@@ -60,7 +91,17 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: regErr.message });
     }
 
-    // 5. transaction
+    // 7. increment player count
+    const { error: playerCountErr } = await supabase
+      .from('tournaments')
+      .update({ current_players: (tournament.current_players || 0) + 1 })
+      .eq('id', tournamentId);
+
+    if (playerCountErr) {
+      return res.status(500).json({ error: playerCountErr.message });
+    }
+
+    // 8. transaction
     await supabase.from('transactions').insert({
       user_id: userId,
       type: 'join',

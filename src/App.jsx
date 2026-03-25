@@ -8,6 +8,20 @@ import {
 import supabase from './lib/supabaseClient';
 import './App.css';
 
+const formatMatchDateTime = (value, fallback = 'TBA') => {
+  if (!value) return fallback;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return fallback;
+  return parsed.toLocaleString();
+};
+
+const toDatetimeLocalInput = (value) => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toISOString().slice(0, 16);
+};
+
 // ===== ANIMATION VARIANTS =====
 const pageVariants = {
   initial: { opacity: 0, y: 20 },
@@ -65,22 +79,36 @@ function TournamentSkeleton() {
 
 // ================== LOGIN SCREEN ==================
 function LoginScreen({ onLogin }) {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleAuth = async (type) => {
+    const value = identifier.trim();
+    const normalizedPhone = value.replace(/\s|-/g, '');
+    const isPhone = /^\+?\d{10,15}$/.test(normalizedPhone);
+    const authPayload = isPhone
+      ? { phone: normalizedPhone, password }
+      : { email: value, password };
+
+    if (!value || !password) {
+      alert('Please enter email/phone and password.');
+      return;
+    }
+
     setLoading(true);
     try {
       if (type === 'login') {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await supabase.auth.signInWithPassword(authPayload);
         if (error) throw error;
         onLogin(data.session); // ✅ State update, no reload
       } else {
-        const { data, error } = await supabase.auth.signUp({ email, password });
+        const { data, error } = await supabase.auth.signUp(authPayload);
         if (error) throw error;
         if (data.user) {
-          const defaultUsername = email.split('@')[0];
+          const defaultUsername = isPhone
+            ? `user${normalizedPhone.slice(-4)}`
+            : value.split('@')[0];
           await supabase.from('profiles').insert([{ 
             id: data.user.id, username: defaultUsername, level: 1, wins: 0, 
             role: 'user', balance: 0, ff_id: '', nickname: ''
@@ -123,7 +151,7 @@ function LoginScreen({ onLogin }) {
           >
             <motion.div className="input-group" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.35 }}>
               <Mail size={20} className="input-icon" />
-              <input type="email" placeholder="Email Address" value={email} onChange={(e) => setEmail(e.target.value)} className="form-input" />
+              <input type="text" placeholder="Email or Phone (+91...)" value={identifier} onChange={(e) => setIdentifier(e.target.value)} className="form-input" />
             </motion.div>
             <motion.div className="input-group" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.45 }}>
               <Lock size={20} className="input-icon" />
@@ -192,7 +220,12 @@ export default function App() {
     setTournamentsLoading(true);
     const {data} = await supabase.from('tournaments').select('*').order('created_at', {ascending: false});
     setTournaments(data || []);
+    if (selectedTournament?.id) {
+      const latestSelectedTournament = (data || []).find((t) => t.id === selectedTournament.id);
+      if (latestSelectedTournament) setSelectedTournament(latestSelectedTournament);
+    }
     setTournamentsLoading(false);
+    return data || [];
   };
 
   useEffect(() => {
@@ -214,8 +247,13 @@ export default function App() {
   if (!session) return <LoginScreen onLogin={(sess) => setSession(sess)} />;
 
   const isAdmin = userProfile?.role === 'admin';
+  const fallbackNameFromSession = session.user.email
+    ? session.user.email.split('@')[0]
+    : session.user.phone
+      ? `user${session.user.phone.slice(-4)}`
+      : 'player';
   const user = {
-    name: userProfile?.username || session.user.email.split('@')[0],
+    name: userProfile?.username || fallbackNameFromSession,
     level: userProfile?.level || 1,
     avatar: `https://i.pravatar.cc/150?u=${session.user.id}`,
     ff_id: userProfile?.ff_id || '',
@@ -258,7 +296,13 @@ export default function App() {
             )}
             {currentView === 'admin' && (
               <motion.div key="admin" variants={pageVariants} initial="initial" animate="animate" exit="exit">
-                <AdminView isAdmin={isAdmin} tournaments={tournaments} setTournaments={setTournaments} refreshList={fetchTournaments} />
+                <AdminView
+                  isAdmin={isAdmin}
+                  tournaments={tournaments}
+                  setTournaments={setTournaments}
+                  refreshList={fetchTournaments}
+                  userId={session.user.id}
+                />
               </motion.div>
             )}
           </AnimatePresence>
@@ -373,7 +417,7 @@ function HomeView({ tournaments, loading, onTournamentSelect }) {
                   <div className="tournament-header"><h4>{t.name}</h4><span className="prize-tag">₹{t.prize}</span></div>
                   <div className="tournament-meta">
                     <span className="meta-item"><Users size={16} /> {t.current_players || 0}/{t.max_players}</span>
-                    <span className="meta-item"><Clock size={16} /> {t.match_time ? new Date(t.match_time).toLocaleDateString() : 'TBA'}</span>
+                    <span className="meta-item"><Clock size={16} /> {formatMatchDateTime(t.match_time)}</span>
                   </div>
                   <div className="tournament-footer">
                     <span className="mode-badge">{t.mode}</span>
@@ -395,19 +439,65 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [alreadyJoined, setAlreadyJoined] = useState(false);
   const [joinData, setJoinData] = useState({ff_uid: '', ign: ''});
+  const [joinMessage, setJoinMessage] = useState('');
+  const [joinMessageType, setJoinMessageType] = useState('');
+  const isMatchFull = (tournament?.current_players || 0) >= (tournament?.max_players || 0);
 
   useEffect(() => {
     if(!tournament || !userProfile) return;
-    supabase.from('match_registrations').select('*')
-      .eq('tournament_id', tournament.id).eq('user_id', userProfile.id).single()
+    setAlreadyJoined(false);
+    supabase.from('match_registrations').select('id')
+      .eq('tournament_id', tournament.id).eq('user_id', userProfile.id).maybeSingle()
       .then(({data}) => { if(data) setAlreadyJoined(true); });
   }, [tournament, userProfile]);
 
   const handleJoin = async () => {
-    if(!joinData.ff_uid || !joinData.ign) { alert("Please enter both FF UID and In-game Name!"); return; }
-    if(userProfile.balance < tournament.entry_fee) { alert("Insufficient Balance!"); return; }
+    if (joining) return;
+    setJoinMessage('');
+    setJoinMessageType('');
+    if (!joinData.ff_uid || !joinData.ign) {
+      setJoinMessage('Please enter both FF UID and In-game Name.');
+      setJoinMessageType('error');
+      return;
+    }
+    if (userProfile.balance < tournament.entry_fee) {
+      setJoinMessage('Insufficient balance for this match.');
+      setJoinMessageType('error');
+      return;
+    }
     setJoining(true);
     try {
+      const { data: existingRegistration } = await supabase
+        .from('match_registrations')
+        .select('id')
+        .eq('tournament_id', tournament.id)
+        .eq('user_id', userProfile.id)
+        .maybeSingle();
+
+      if (existingRegistration) {
+        setAlreadyJoined(true);
+        setShowJoinModal(false);
+        setJoinMessage('You already joined this match.');
+        setJoinMessageType('success');
+        return;
+      }
+
+      const { data: latestTournament, error: latestTournamentError } = await supabase
+        .from('tournaments')
+        .select('current_players, max_players')
+        .eq('id', tournament.id)
+        .single();
+
+      if (latestTournamentError) {
+        throw new Error('Unable to verify player slots right now.');
+      }
+
+      if ((latestTournament.current_players || 0) >= latestTournament.max_players) {
+        setJoinMessage('Match Full');
+        setJoinMessageType('error');
+        return;
+      }
+
       const response = await fetch("/api/joinTournament", {
         method: "POST",
         headers: {
@@ -416,25 +506,34 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
         body: JSON.stringify({
           userId: userProfile.id,
           tournamentId: tournament.id,
-          entryFee: tournament.entry_fee
+          entryFee: tournament.entry_fee,
+          ff_uid: joinData.ff_uid,
+          ign: joinData.ign
         })
       });
 
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Join failed");
+        if (result?.code === '23505') {
+          setAlreadyJoined(true);
+          setShowJoinModal(false);
+          setJoinMessage('Already joined.');
+          setJoinMessageType('success');
+          return;
+        }
+        throw new Error(result.error || "Unable to join match right now.");
       }
-      const {error} = await supabase.from('match_registrations').insert({
-        tournament_id: tournament.id, user_id: userProfile.id,
-        ff_uid: joinData.ff_uid, ign: joinData.ign, status: 'joined'
-      });
-      if(error) throw error;
-      await supabase.from('tournaments').update({ current_players: (tournament.current_players || 0) + 1 }).eq('id', tournament.id);
       setAlreadyJoined(true); setShowJoinModal(false);
-      alert("✅ Successfully Joined!"); onJoinSuccess();
-    } catch(err) { alert("Error: " + err.message); }
-    setJoining(false);
+      setJoinMessage('Successfully joined this match.');
+      setJoinMessageType('success');
+      await onJoinSuccess();
+    } catch(err) {
+      setJoinMessage(err?.message || 'Unable to join match right now.');
+      setJoinMessageType('error');
+    } finally {
+      setJoining(false);
+    }
   };
 
   if (!tournament) return null;
@@ -459,11 +558,28 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
       </motion.div>
 
       <motion.div className="detail-content" variants={staggerContainer} initial="initial" animate="animate">
+        {joinMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            style={{
+              marginBottom: '12px',
+              borderRadius: '10px',
+              padding: '10px 12px',
+              fontSize: '13px',
+              border: joinMessageType === 'success' ? '1px solid #22c55e' : '1px solid #ef4444',
+              background: joinMessageType === 'success' ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+              color: joinMessageType === 'success' ? '#86efac' : '#fca5a5'
+            }}
+          >
+            {joinMessage}
+          </motion.div>
+        )}
         <motion.div className="info-grid" variants={staggerItem}>
           <div className="info-item"><span className="label">Entry Fee</span><span className="value">₹{tournament.entry_fee}</span></div>
           <div className="info-item"><span className="label">Mode</span><span className="value">{tournament.mode}</span></div>
           <div className="info-item"><span className="label">Players</span><span className="value">{tournament.current_players || 0}/{tournament.max_players}</span></div>
-          <div className="info-item"><span className="label">Time</span><span className="value">{tournament.match_time ? new Date(tournament.match_time).toLocaleString() : 'TBA'}</span></div>
+          <div className="info-item"><span className="label">Time</span><span className="value">{formatMatchDateTime(tournament.match_time)}</span></div>
         </motion.div>
 
         <motion.div variants={staggerItem} style={{background: 'var(--bg-card)', padding: '20px', borderRadius: '16px', marginBottom: '20px'}}>
@@ -473,8 +589,8 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
 
         <motion.div variants={staggerItem}>
           {!alreadyJoined ? (
-            <motion.button className="btn btn-primary" onClick={() => setShowJoinModal(true)} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
-              <Trophy size={20} /> Join Tournament (₹{tournament.entry_fee})
+            <motion.button className="btn btn-primary" onClick={() => setShowJoinModal(true)} disabled={joining || alreadyJoined || isMatchFull} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
+              <Trophy size={20} /> {isMatchFull ? 'Match Full' : `Join Tournament (₹${tournament.entry_fee})`}
             </motion.button>
           ) : (
             <motion.div
@@ -702,7 +818,13 @@ function TournamentForm({ initial, onSave, onCancel, saving }) {
         <input className="form-input" type="number" placeholder="Max Players" value={form.max_players} onChange={e => set('max_players', e.target.value)} disabled={form.mode === '1v1'} />
       </motion.div>
       <motion.div variants={staggerItem}>
-        <input className="form-input" type="datetime-local" value={form.match_time} onChange={e => set('match_time', e.target.value)} />
+        <input
+          className="form-input"
+          type="datetime-local"
+          value={form.match_time}
+          onChange={e => set('match_time', e.target.value)}
+          onFocus={(e) => e.target.showPicker?.()}
+        />
       </motion.div>
       <motion.div variants={staggerItem} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
         <input className="form-input" placeholder="Room ID" value={form.room_id} onChange={e => set('room_id', e.target.value)} />
@@ -724,11 +846,12 @@ function TournamentForm({ initial, onSave, onCancel, saving }) {
   );
 }
 
-function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
+function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }) {
   const [view, setView] = useState('dashboard');
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
+  const [registrationsByTournament, setRegistrationsByTournament] = useState({});
 
   if (!isAdmin) return (
     <div className="view" style={{textAlign: 'center', paddingTop: '60px'}}>
@@ -739,8 +862,31 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
     </div>
   );
 
+  useEffect(() => {
+    const loadRegistrations = async () => {
+      const { data, error } = await supabase
+        .from('match_registrations')
+        .select('id, tournament_id, ff_uid, ign, profiles(username)')
+        .order('created_at', { ascending: false });
+
+      if (error) return;
+
+      const grouped = (data || []).reduce((acc, row) => {
+        if (!acc[row.tournament_id]) acc[row.tournament_id] = [];
+        acc[row.tournament_id].push(row);
+        return acc;
+      }, {});
+
+      setRegistrationsByTournament(grouped);
+    };
+
+    loadRegistrations();
+  }, [tournaments]);
+
   const handleCreate = async (form) => {
     if (!form.name || !form.prize) return alert('Name and Prize required');
+    if (!form.match_time) return alert('Match time is required');
+    if (Number(form.max_players) < 2) return alert('Max players must be at least 2');
     setSaving(true);
     const { data, error } = await supabase.from('tournaments').insert([{
       ...form, prize: Number(form.prize), entry_fee: Number(form.entry_fee),
@@ -754,9 +900,13 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
 
   const handleUpdate = async (form) => {
     if (!form.name || !form.prize) return alert('Name and Prize required');
+    if (!form.match_time) return alert('Match time is required');
+    if (Number(form.max_players) < 2) return alert('Max players must be at least 2');
     setSaving(true);
     const { error } = await supabase.from('tournaments').update({
       ...form, prize: Number(form.prize), entry_fee: Number(form.entry_fee), max_players: Number(form.max_players),
+      match_time: form.match_time ? new Date(form.match_time).toISOString() : null,
+      image_url: form.image_url || null
     }).eq('id', editData.id);
     setSaving(false);
     if (error) return alert('Error: ' + error.message);
@@ -766,13 +916,23 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
 
   const handleDelete = async (id, name) => {
     if (!window.confirm(`Delete "${name}"?`)) return;
-    const { error } = await supabase.from('tournaments').delete().eq('id', id);
-    if (error) return alert('Error: ' + error.message);
-    setTournaments(tournaments.filter(t => t.id !== id)); refreshList();
+    const response = await fetch('/api/deleteTournament', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tournamentId: id, userId })
+    });
+    const result = await response.json();
+    if (!response.ok) return alert('Error: ' + (result.error || 'Delete failed'));
+
+    setTournaments(tournaments.filter(t => t.id !== id));
+    const newRegistrationMap = { ...registrationsByTournament };
+    delete newRegistrationMap[id];
+    setRegistrationsByTournament(newRegistrationMap);
+    refreshList();
   };
 
   const openEdit = (t) => {
-    setEditData({...t, match_time: t.match_time ? new Date(t.match_time).toISOString().slice(0, 16) : ''});
+    setEditData({...t, match_time: toDatetimeLocalInput(t.match_time)});
     setView('edit');
   };
 
@@ -784,7 +944,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
   };
 
   const statusColor = { live: '#ef4444', upcoming: '#3b82f6', registration: '#22c55e', completed: '#888' };
-  const filtered = tournaments.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = tournaments.filter(t => (t.name || '').toLowerCase().includes(search.toLowerCase()));
 
   if (view === 'create') return (
     <div className="view">
@@ -826,7 +986,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
               <div>
                 <h4 style={{fontSize: '15px', fontWeight: 700}}>{t.name}</h4>
                 <span style={{fontSize: '12px', color: statusColor[t.status], fontWeight: 600, textTransform: 'uppercase'}}>{t.status}</span>
-                <span style={{fontSize: '12px', color: 'var(--text-dim)', marginLeft: '10px'}}>{t.current_players || 0}/{t.max_players} joined</span>
+                <span style={{fontSize: '12px', color: 'var(--text-dim)', marginLeft: '10px'}}>{(registrationsByTournament[t.id] || []).length}/{t.max_players} joined</span>
               </div>
               <div style={{display: 'flex', gap: '8px'}}>
                 <motion.button onClick={() => openEdit(t)} style={{background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#3b82f6', borderRadius: '8px', padding: '6px 10px'}} whileTap={{ scale: 0.9 }}><Edit size={14} /></motion.button>
@@ -834,6 +994,16 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
               </div>
             </div>
             <div style={{fontSize: '13px', color: 'var(--text-dim)'}}>₹{t.prize} Prize • Entry ₹{t.entry_fee}</div>
+            <div style={{fontSize: '12px', color: '#aaa', marginTop: '2px'}}>Match: {formatMatchDateTime(t.match_time)}</div>
+            {(registrationsByTournament[t.id] || []).length > 0 && (
+              <div style={{marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px'}}>
+                {(registrationsByTournament[t.id] || []).slice(0, 5).map((player) => (
+                  <div key={player.id} style={{fontSize: '11px', color: '#9ca3af'}}>
+                    {player.profiles?.username || 'player'} • UID: {player.ff_uid || '-'} • IGN: {player.ign || '-'}
+                  </div>
+                ))}
+              </div>
+            )}
             {t.room_id && <div style={{fontSize: '12px', color: '#facc15', marginTop: '4px'}}>Room: {t.room_id}</div>}
           </motion.div>
         ))}

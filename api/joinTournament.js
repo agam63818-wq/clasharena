@@ -12,8 +12,10 @@ export default async function handler(req, res) {
 
   try {
     const { userId, tournamentId, entryFee, ff_uid, ign } = req.body;
+    const safeFfUid = String(ff_uid || '').trim();
+    const safeIgn = String(ign || '').trim();
 
-    if (!userId || !tournamentId || !ff_uid || !ign) {
+    if (!userId || !tournamentId || !safeFfUid || !safeIgn) {
       return res.status(400).json({ error: 'Missing data' });
     }
 
@@ -82,8 +84,8 @@ export default async function handler(req, res) {
       .insert({
         tournament_id: tournamentId,
         user_id: userId,
-        ff_uid,
-        ign,
+        ff_uid: safeFfUid,
+        ign: safeIgn,
         status: 'joined'
       });
 
@@ -94,10 +96,19 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Could not complete registration' });
     }
 
-    // 7. increment player count
+    // 7. sync player count from latest registrations (avoids stale state/race issues)
+    const { count, error: countError } = await supabase
+      .from('match_registrations')
+      .select('id', { count: 'exact', head: true })
+      .eq('tournament_id', tournamentId);
+
+    if (countError) {
+      return res.status(500).json({ error: 'Could not update player count' });
+    }
+
     const { error: playerCountErr } = await supabase
       .from('tournaments')
-      .update({ current_players: (tournament.current_players || 0) + 1 })
+      .update({ current_players: count || 0 })
       .eq('id', tournamentId);
 
     if (playerCountErr) {

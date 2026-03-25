@@ -220,7 +220,12 @@ export default function App() {
     setTournamentsLoading(true);
     const {data} = await supabase.from('tournaments').select('*').order('created_at', {ascending: false});
     setTournaments(data || []);
+    if (selectedTournament?.id) {
+      const latestSelectedTournament = (data || []).find((t) => t.id === selectedTournament.id);
+      if (latestSelectedTournament) setSelectedTournament(latestSelectedTournament);
+    }
     setTournamentsLoading(false);
+    return data || [];
   };
 
   useEffect(() => {
@@ -436,6 +441,7 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
   const [joinData, setJoinData] = useState({ff_uid: '', ign: ''});
   const [joinMessage, setJoinMessage] = useState('');
   const [joinMessageType, setJoinMessageType] = useState('');
+  const isMatchFull = (tournament?.current_players || 0) >= (tournament?.max_players || 0);
 
   useEffect(() => {
     if(!tournament || !userProfile) return;
@@ -476,6 +482,22 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
         return;
       }
 
+      const { data: latestTournament, error: latestTournamentError } = await supabase
+        .from('tournaments')
+        .select('current_players, max_players')
+        .eq('id', tournament.id)
+        .single();
+
+      if (latestTournamentError) {
+        throw new Error('Unable to verify player slots right now.');
+      }
+
+      if ((latestTournament.current_players || 0) >= latestTournament.max_players) {
+        setJoinMessage('Match Full');
+        setJoinMessageType('error');
+        return;
+      }
+
       const response = await fetch("/api/joinTournament", {
         method: "POST",
         headers: {
@@ -505,7 +527,7 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
       setAlreadyJoined(true); setShowJoinModal(false);
       setJoinMessage('Successfully joined this match.');
       setJoinMessageType('success');
-      onJoinSuccess();
+      await onJoinSuccess();
     } catch(err) {
       setJoinMessage(err?.message || 'Unable to join match right now.');
       setJoinMessageType('error');
@@ -567,8 +589,8 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
 
         <motion.div variants={staggerItem}>
           {!alreadyJoined ? (
-            <motion.button className="btn btn-primary" onClick={() => setShowJoinModal(true)} disabled={joining || alreadyJoined} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
-              <Trophy size={20} /> Join Tournament (₹{tournament.entry_fee})
+            <motion.button className="btn btn-primary" onClick={() => setShowJoinModal(true)} disabled={joining || alreadyJoined || isMatchFull} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
+              <Trophy size={20} /> {isMatchFull ? 'Match Full' : `Join Tournament (₹${tournament.entry_fee})`}
             </motion.button>
           ) : (
             <motion.div
@@ -964,7 +986,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
               <div>
                 <h4 style={{fontSize: '15px', fontWeight: 700}}>{t.name}</h4>
                 <span style={{fontSize: '12px', color: statusColor[t.status], fontWeight: 600, textTransform: 'uppercase'}}>{t.status}</span>
-                <span style={{fontSize: '12px', color: 'var(--text-dim)', marginLeft: '10px'}}>{t.current_players || 0}/{t.max_players} joined</span>
+                <span style={{fontSize: '12px', color: 'var(--text-dim)', marginLeft: '10px'}}>{(registrationsByTournament[t.id] || []).length}/{t.max_players} joined</span>
               </div>
               <div style={{display: 'flex', gap: '8px'}}>
                 <motion.button onClick={() => openEdit(t)} style={{background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#3b82f6', borderRadius: '8px', padding: '6px 10px'}} whileTap={{ scale: 0.9 }}><Edit size={14} /></motion.button>

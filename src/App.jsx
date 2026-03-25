@@ -8,6 +8,27 @@ import {
 import supabase from './lib/supabaseClient';
 import './App.css';
 
+const formatMatchDateTime = (value, fallback = 'TBA') => {
+  if (!value) return fallback;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return fallback;
+  return parsed.toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+
+const toDatetimeLocalInput = (value) => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const tzOffsetMs = parsed.getTimezoneOffset() * 60000;
+  return new Date(parsed.getTime() - tzOffsetMs).toISOString().slice(0, 16);
+};
+
 // ===== ANIMATION VARIANTS =====
 const pageVariants = {
   initial: { opacity: 0, y: 20 },
@@ -65,22 +86,36 @@ function TournamentSkeleton() {
 
 // ================== LOGIN SCREEN ==================
 function LoginScreen({ onLogin }) {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleAuth = async (type) => {
+    const value = identifier.trim();
+    const normalizedPhone = value.replace(/\s|-/g, '');
+    const isPhone = /^\+?\d{10,15}$/.test(normalizedPhone);
+    const authPayload = isPhone
+      ? { phone: normalizedPhone, password }
+      : { email: value, password };
+
+    if (!value || !password) {
+      alert('Please enter email/phone and password.');
+      return;
+    }
+
     setLoading(true);
     try {
       if (type === 'login') {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await supabase.auth.signInWithPassword(authPayload);
         if (error) throw error;
         onLogin(data.session); // ✅ State update, no reload
       } else {
-        const { data, error } = await supabase.auth.signUp({ email, password });
+        const { data, error } = await supabase.auth.signUp(authPayload);
         if (error) throw error;
         if (data.user) {
-          const defaultUsername = email.split('@')[0];
+          const defaultUsername = isPhone
+            ? `user${normalizedPhone.slice(-4)}`
+            : value.split('@')[0];
           await supabase.from('profiles').insert([{ 
             id: data.user.id, username: defaultUsername, level: 1, wins: 0, 
             role: 'user', balance: 0, ff_id: '', nickname: ''
@@ -123,7 +158,7 @@ function LoginScreen({ onLogin }) {
           >
             <motion.div className="input-group" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.35 }}>
               <Mail size={20} className="input-icon" />
-              <input type="email" placeholder="Email Address" value={email} onChange={(e) => setEmail(e.target.value)} className="form-input" />
+              <input type="text" placeholder="Email or Phone (+91...)" value={identifier} onChange={(e) => setIdentifier(e.target.value)} className="form-input" />
             </motion.div>
             <motion.div className="input-group" initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.45 }}>
               <Lock size={20} className="input-icon" />
@@ -214,8 +249,13 @@ export default function App() {
   if (!session) return <LoginScreen onLogin={(sess) => setSession(sess)} />;
 
   const isAdmin = userProfile?.role === 'admin';
+  const fallbackNameFromSession = session.user.email
+    ? session.user.email.split('@')[0]
+    : session.user.phone
+      ? `user${session.user.phone.slice(-4)}`
+      : 'player';
   const user = {
-    name: userProfile?.username || session.user.email.split('@')[0],
+    name: userProfile?.username || fallbackNameFromSession,
     level: userProfile?.level || 1,
     avatar: `https://i.pravatar.cc/150?u=${session.user.id}`,
     ff_id: userProfile?.ff_id || '',
@@ -258,7 +298,13 @@ export default function App() {
             )}
             {currentView === 'admin' && (
               <motion.div key="admin" variants={pageVariants} initial="initial" animate="animate" exit="exit">
-                <AdminView isAdmin={isAdmin} tournaments={tournaments} setTournaments={setTournaments} refreshList={fetchTournaments} />
+                <AdminView
+                  isAdmin={isAdmin}
+                  tournaments={tournaments}
+                  setTournaments={setTournaments}
+                  refreshList={fetchTournaments}
+                  userId={session.user.id}
+                />
               </motion.div>
             )}
           </AnimatePresence>
@@ -373,7 +419,7 @@ function HomeView({ tournaments, loading, onTournamentSelect }) {
                   <div className="tournament-header"><h4>{t.name}</h4><span className="prize-tag">₹{t.prize}</span></div>
                   <div className="tournament-meta">
                     <span className="meta-item"><Users size={16} /> {t.current_players || 0}/{t.max_players}</span>
-                    <span className="meta-item"><Clock size={16} /> {t.match_time ? new Date(t.match_time).toLocaleDateString() : 'TBA'}</span>
+                    <span className="meta-item"><Clock size={16} /> {formatMatchDateTime(t.match_time)}</span>
                   </div>
                   <div className="tournament-footer">
                     <span className="mode-badge">{t.mode}</span>
@@ -416,7 +462,9 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
         body: JSON.stringify({
           userId: userProfile.id,
           tournamentId: tournament.id,
-          entryFee: tournament.entry_fee
+          entryFee: tournament.entry_fee,
+          ff_uid: joinData.ff_uid,
+          ign: joinData.ign
         })
       });
 
@@ -425,11 +473,6 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
       if (!response.ok) {
         throw new Error(result.error || "Join failed");
       }
-      const {error} = await supabase.from('match_registrations').insert({
-        tournament_id: tournament.id, user_id: userProfile.id,
-        ff_uid: joinData.ff_uid, ign: joinData.ign, status: 'joined'
-      });
-      if(error) throw error;
       await supabase.from('tournaments').update({ current_players: (tournament.current_players || 0) + 1 }).eq('id', tournament.id);
       setAlreadyJoined(true); setShowJoinModal(false);
       alert("✅ Successfully Joined!"); onJoinSuccess();
@@ -463,7 +506,7 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
           <div className="info-item"><span className="label">Entry Fee</span><span className="value">₹{tournament.entry_fee}</span></div>
           <div className="info-item"><span className="label">Mode</span><span className="value">{tournament.mode}</span></div>
           <div className="info-item"><span className="label">Players</span><span className="value">{tournament.current_players || 0}/{tournament.max_players}</span></div>
-          <div className="info-item"><span className="label">Time</span><span className="value">{tournament.match_time ? new Date(tournament.match_time).toLocaleString() : 'TBA'}</span></div>
+          <div className="info-item"><span className="label">Time</span><span className="value">{formatMatchDateTime(tournament.match_time)}</span></div>
         </motion.div>
 
         <motion.div variants={staggerItem} style={{background: 'var(--bg-card)', padding: '20px', borderRadius: '16px', marginBottom: '20px'}}>
@@ -724,7 +767,7 @@ function TournamentForm({ initial, onSave, onCancel, saving }) {
   );
 }
 
-function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
+function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }) {
   const [view, setView] = useState('dashboard');
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -741,6 +784,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
 
   const handleCreate = async (form) => {
     if (!form.name || !form.prize) return alert('Name and Prize required');
+    if (Number(form.max_players) < 2) return alert('Max players must be at least 2');
     setSaving(true);
     const { data, error } = await supabase.from('tournaments').insert([{
       ...form, prize: Number(form.prize), entry_fee: Number(form.entry_fee),
@@ -754,9 +798,12 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
 
   const handleUpdate = async (form) => {
     if (!form.name || !form.prize) return alert('Name and Prize required');
+    if (Number(form.max_players) < 2) return alert('Max players must be at least 2');
     setSaving(true);
     const { error } = await supabase.from('tournaments').update({
       ...form, prize: Number(form.prize), entry_fee: Number(form.entry_fee), max_players: Number(form.max_players),
+      match_time: form.match_time ? new Date(form.match_time).toISOString() : null,
+      image_url: form.image_url || null
     }).eq('id', editData.id);
     setSaving(false);
     if (error) return alert('Error: ' + error.message);
@@ -766,13 +813,19 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
 
   const handleDelete = async (id, name) => {
     if (!window.confirm(`Delete "${name}"?`)) return;
-    const { error } = await supabase.from('tournaments').delete().eq('id', id);
-    if (error) return alert('Error: ' + error.message);
+    const response = await fetch('/api/deleteTournament', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tournamentId: id, userId })
+    });
+    const result = await response.json();
+    if (!response.ok) return alert('Error: ' + (result.error || 'Delete failed'));
+
     setTournaments(tournaments.filter(t => t.id !== id)); refreshList();
   };
 
   const openEdit = (t) => {
-    setEditData({...t, match_time: t.match_time ? new Date(t.match_time).toISOString().slice(0, 16) : ''});
+    setEditData({...t, match_time: toDatetimeLocalInput(t.match_time)});
     setView('edit');
   };
 
@@ -784,7 +837,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
   };
 
   const statusColor = { live: '#ef4444', upcoming: '#3b82f6', registration: '#22c55e', completed: '#888' };
-  const filtered = tournaments.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = tournaments.filter(t => (t.name || '').toLowerCase().includes(search.toLowerCase()));
 
   if (view === 'create') return (
     <div className="view">
@@ -834,6 +887,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList }) {
               </div>
             </div>
             <div style={{fontSize: '13px', color: 'var(--text-dim)'}}>₹{t.prize} Prize • Entry ₹{t.entry_fee}</div>
+            <div style={{fontSize: '12px', color: '#aaa', marginTop: '2px'}}>Match: {formatMatchDateTime(t.match_time)}</div>
             {t.room_id && <div style={{fontSize: '12px', color: '#facc15', marginTop: '4px'}}>Room: {t.room_id}</div>}
           </motion.div>
         ))}

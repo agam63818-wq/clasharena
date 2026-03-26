@@ -1009,22 +1009,22 @@ const adminStats = [
 ) : (
   <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
     {(registrationsByTournament[t.id] || []).map((player) => (
-      <div key={player.id} style={{
-        background: '#0f0f17',
-        padding: '8px',
-        borderRadius: '8px'
-      }}>
-        <div style={{ color: '#fff', fontSize: '13px' }}>
-          👤 {player.profiles?.username || 'player'}
-        </div>
-        <div style={{ color: '#9ca3af', fontSize: '12px' }}>
-          🎮 UID: {player.ff_uid || '-'}
-        </div>
-        <div style={{ color: '#9ca3af', fontSize: '12px' }}>
-          🏷 IGN: {player.ign || '-'}
-        </div>
-      </div>
-    )}
+  <div key={player.id} style={{
+    background: '#0f0f17',
+    padding: '8px',
+    borderRadius: '8px'
+  }}>
+    <div style={{ color: '#fff', fontSize: '13px' }}>
+      {player.profiles?.username || 'player'}
+    </div>
+    <div style={{ color: '#9ca3af', fontSize: '12px' }}>
+      UID: {player.ff_uid || '-'}
+    </div>
+    <div style={{ color: '#9ca3af', fontSize: '12px' }}>
+      IGN: {player.ign || '-'}
+    </div>
+  </div>
+))}
 </div>
 );
 // ✅ DEFAULT DASHBOARD VIEW

@@ -937,11 +937,18 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
   };
 
   const stats = {
-    total: tournaments.length,
-    live: tournaments.filter(t => t.status === 'live').length,
-    upcoming: tournaments.filter(t => t.status === 'upcoming').length,
-    registration: tournaments.filter(t => t.status === 'registration').length
-  };
+  total: tournaments.length,
+  live: tournaments.filter(t => t.status === 'live').length,
+  upcoming: tournaments.filter(t => t.status === 'upcoming').length,
+  registration: tournaments.filter(t => t.status === 'registration').length
+};
+
+const adminStats = [
+  { value: stats.total, label: 'Total Tournaments', color: 'var(--primary)', bg: 'rgba(255,77,0,0.2)', border: 'rgba(255,77,0,0.3)' },
+  { value: stats.live, label: 'Live Now', color: '#22c55e', bg: 'rgba(34,197,94,0.2)', border: 'rgba(34,197,94,0.3)' },
+  { value: stats.upcoming, label: 'Upcoming', color: '#3b82f6', bg: 'rgba(59,130,246,0.2)', border: 'rgba(59,130,246,0.3)' },
+  { value: stats.registration, label: 'Open Reg', color: '#f59e0b', bg: 'rgba(245,158,11,0.2)', border: 'rgba(245,158,11,0.3)' }
+];
 
   const statusColor = { live: '#ef4444', upcoming: '#3b82f6', registration: '#22c55e', completed: '#888' };
   const filtered = tournaments.filter(t => (t.name || '').toLowerCase().includes(search.toLowerCase()));
@@ -1022,12 +1029,7 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
 )}
 
   // Dashboard
-  const adminStats = [
-  { value: stats.total, label: 'Total Tournaments', color: 'var(--primary)', bg: 'rgba(255,77,0,0.2)', border: 'rgba(255,77,0,0.3)' }, // ← comma add
-  { value: stats.live, label: 'Live Now', color: '#22c55e', bg: 'rgba(34,197,94,0.2)', border: 'rgba(34,197,94,0.3)' },
-  { value: stats.upcoming, label: 'Upcoming', color: '#3b82f6', bg: 'rgba(59,130,246,0.2)', border: 'rgba(59,130,246,0.3)' },
-  { value: stats.registration, label: 'Open Reg', color: '#f59e0b', bg: 'rgba(245,158,11,0.2)', border: 'rgba(245,158,11,0.3)' }
-];
+  
   return (
     <div className="view">
       <motion.h2 initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} style={{fontSize: '24px', fontWeight: 800, marginBottom: '20px'}}>

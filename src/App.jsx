@@ -1028,49 +1028,35 @@ const adminStats = [
   </div>
 )}
 
-  // Dashboard
-  
-  return (
-    <div className="view">
-      <motion.h2 initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} style={{fontSize: '24px', fontWeight: 800, marginBottom: '20px'}}>
-        Admin Dashboard
-      </motion.h2>
+return (
+  <div className="view">
+    <motion.h2
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      style={{ fontSize: '24px', fontWeight: 800, marginBottom: '16px' }}
+    >
+      Admin Dashboard
+    </motion.h2>
 
-      <motion.div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px'}} variants={staggerContainer} initial="initial" animate="animate">
-        {adminStats.map((s, i) => (
-          <motion.div
-            key={i} variants={staggerItem}
-            whileHover={{ scale: 1.05, y: -3 }} whileTap={{ scale: 0.97 }} transition={{ duration: 0.25 }}
-            style={{background: `linear-gradient(135deg, ${s.bg}, #16161f)`, border: `1px solid ${s.border}`, borderRadius: '16px', padding: '18px', cursor: 'default'}}
-          >
-            <div style={{fontSize: '28px', fontWeight: 800, color: s.color}}>{s.value}</div>
-            <div style={{fontSize: '12px', color: 'var(--text-dim)'}}>{s.label}</div>
-          </motion.div>
-        ))}
-      </motion.div>
-
-      <motion.div style={{display: 'flex', flexDirection: 'column', gap: '12px'}} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-        <motion.button className="btn btn-primary" onClick={() => setView('create')} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}><Plus size={18} /> Create New Tournament</motion.button>
-        <motion.button className="btn btn-outline" onClick={() => setView('list')} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}><Settings size={18} /> Manage All ({tournaments.length})</motion.button>
-      </motion.div>
-
-      <h3 style={{marginTop: '24px', marginBottom: '12px', fontSize: '16px', color: 'var(--text-dim)'}}>Recent</h3>
-      <motion.div style={{display: 'flex', flexDirection: 'column', gap: '10px'}} variants={staggerContainer} initial="initial" animate="animate">
-        {tournaments.slice(0, 3).map(t => (
-          <motion.div
-            key={t.id} variants={staggerItem}
-            whileHover={{ scale: 1.02, x: 4 }} whileTap={{ scale: 0.98 }} transition={{ duration: 0.25 }}
-            style={{background: '#16161f', padding: '12px 16px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}
-          >
-            <span style={{fontWeight: 600}}>{t.name}</span>
-            <span style={{fontSize: '12px', color: statusColor[t.status]}}>{t.status}</span>
-          </motion.div>
-        ))}
-      </motion.div>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+      {adminStats.map((item, i) => (
+        <div
+          key={i}
+          style={{
+            padding: '16px',
+            borderRadius: '12px',
+            background: item.bg,
+            border: `1px solid ${item.border}`,
+            color: item.color
+          }}
+        >
+          <div style={{ fontSize: '20px', fontWeight: 'bold' }}>{item.value}</div>
+          <div style={{ fontSize: '12px' }}>{item.label}</div>
+        </div>
+      ))}
     </div>
-  );
-}
-
+  </div>
+);
 // ===== BOTTOM NAV =====
 function BottomNav({ currentView, setView, isAdmin }) {
   const tabs = [

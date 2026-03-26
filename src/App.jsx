@@ -1024,10 +1024,10 @@ const adminStats = [
           🏷 IGN: {player.ign || '-'}
         </div>
       </div>
-    ))}
-  </div>
-)}
-
+    )}
+</div>
+);
+// ✅ DEFAULT DASHBOARD VIEW
 return (
   <div className="view">
     <motion.h2
@@ -1057,6 +1057,7 @@ return (
     </div>
   </div>
 );
+
 // ===== BOTTOM NAV =====
 function BottomNav({ currentView, setView, isAdmin }) {
   const tabs = [

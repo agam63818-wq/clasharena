@@ -853,16 +853,9 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
   const [search, setSearch] = useState('');
   const [registrationsByTournament, setRegistrationsByTournament] = useState({});
 
-  if (!isAdmin) return (
-    <div className="view" style={{textAlign: 'center', paddingTop: '60px'}}>
-      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring' }}>
-        <Shield size={56} color="#ef4444" />
-        <h3>Access Denied</h3>
-      </motion.div>
-    </div>
-  );
-
   useEffect(() => {
+    if (!isAdmin) return;
+
     const loadRegistrations = async () => {
       const { data, error } = await supabase
         .from('match_registrations')
@@ -881,7 +874,16 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
     };
 
     loadRegistrations();
-  }, [tournaments]);
+  }, [isAdmin, tournaments]);
+
+  if (!isAdmin) return (
+    <div className="view" style={{textAlign: 'center', paddingTop: '60px'}}>
+      <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring' }}>
+        <Shield size={56} color="#ef4444" />
+        <h3>Access Denied</h3>
+      </motion.div>
+    </div>
+  );
 
   const handleCreate = async (form) => {
     if (!form.name || !form.prize) return alert('Name and Prize required');
@@ -889,13 +891,19 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
     if (Number(form.max_players) < 2) return alert('Max players must be at least 2');
     setSaving(true);
     const { data, error } = await supabase.from('tournaments').insert([{
-      ...form, prize: Number(form.prize), entry_fee: Number(form.entry_fee),
-      max_players: Number(form.max_players),match_time: form.match_time ? new Date(form.match_time).toISOString() : null, image_url: form.image_url || null
+      ...form,
+      prize: Number(form.prize),
+      entry_fee: Number(form.entry_fee),
+      max_players: Number(form.max_players),
+      match_time: form.match_time ? new Date(form.match_time).toISOString() : null,
+      image_url: form.image_url || null
     }]).select();
     setSaving(false);
     if (error) return alert('Error: ' + error.message);
-    setTournaments([data[0], ...tournaments]); alert('✅ Created!');
-    setView('dashboard'); refreshList();
+    setTournaments([data[0], ...tournaments]);
+    alert('✅ Created!');
+    setView('dashboard');
+    refreshList();
   };
 
   const handleUpdate = async (form) => {
@@ -904,14 +912,20 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
     if (Number(form.max_players) < 2) return alert('Max players must be at least 2');
     setSaving(true);
     const { error } = await supabase.from('tournaments').update({
-      ...form, prize: Number(form.prize), entry_fee: Number(form.entry_fee), max_players: Number(form.max_players),
+      ...form,
+      prize: Number(form.prize),
+      entry_fee: Number(form.entry_fee),
+      max_players: Number(form.max_players),
       match_time: form.match_time ? new Date(form.match_time).toISOString() : null,
       image_url: form.image_url || null
     }).eq('id', editData.id);
     setSaving(false);
     if (error) return alert('Error: ' + error.message);
     setTournaments(tournaments.map(t => t.id === editData.id ? { ...t, ...form } : t));
-    alert('✅ Updated!'); setView('list'); setEditData(null); refreshList();
+    alert('✅ Updated!');
+    setView('list');
+    setEditData(null);
+    refreshList();
   };
 
   const handleDelete = async (id, name) => {
@@ -932,23 +946,23 @@ function AdminView({ isAdmin, tournaments, setTournaments, refreshList, userId }
   };
 
   const openEdit = (t) => {
-    setEditData({...t, match_time: toDatetimeLocalInput(t.match_time)});
+    setEditData({ ...t, match_time: toDatetimeLocalInput(t.match_time) });
     setView('edit');
   };
 
   const stats = {
-  total: tournaments.length,
-  live: tournaments.filter(t => t.status === 'live').length,
-  upcoming: tournaments.filter(t => t.status === 'upcoming').length,
-  registration: tournaments.filter(t => t.status === 'registration').length
-};
+    total: tournaments.length,
+    live: tournaments.filter(t => t.status === 'live').length,
+    upcoming: tournaments.filter(t => t.status === 'upcoming').length,
+    registration: tournaments.filter(t => t.status === 'registration').length
+  };
 
-const adminStats = [
-  { value: stats.total, label: 'Total Tournaments', color: 'var(--primary)', bg: 'rgba(255,77,0,0.2)', border: 'rgba(255,77,0,0.3)' },
-  { value: stats.live, label: 'Live Now', color: '#22c55e', bg: 'rgba(34,197,94,0.2)', border: 'rgba(34,197,94,0.3)' },
-  { value: stats.upcoming, label: 'Upcoming', color: '#3b82f6', bg: 'rgba(59,130,246,0.2)', border: 'rgba(59,130,246,0.3)' },
-  { value: stats.registration, label: 'Open Reg', color: '#f59e0b', bg: 'rgba(245,158,11,0.2)', border: 'rgba(245,158,11,0.3)' }
-];
+  const adminStats = [
+    { value: stats.total, label: 'Total Tournaments', color: 'var(--primary)', bg: 'rgba(255,77,0,0.2)', border: 'rgba(255,77,0,0.3)' },
+    { value: stats.live, label: 'Live Now', color: '#22c55e', bg: 'rgba(34,197,94,0.2)', border: 'rgba(34,197,94,0.3)' },
+    { value: stats.upcoming, label: 'Upcoming', color: '#3b82f6', bg: 'rgba(59,130,246,0.2)', border: 'rgba(59,130,246,0.3)' },
+    { value: stats.registration, label: 'Open Reg', color: '#f59e0b', bg: 'rgba(245,158,11,0.2)', border: 'rgba(245,158,11,0.3)' }
+  ];
 
   const statusColor = { live: '#ef4444', upcoming: '#3b82f6', registration: '#22c55e', completed: '#888' };
   const filtered = tournaments.filter(t => (t.name || '').toLowerCase().includes(search.toLowerCase()));
@@ -979,84 +993,113 @@ const adminStats = [
         <motion.button onClick={() => setView('dashboard')} style={{background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: '20px'}} whileTap={{ scale: 0.9 }}>←</motion.button>
         <h2 style={{fontSize: '20px', fontWeight: 800}}>Manage Tournaments</h2>
       </div>
-      <input style={{background: '#0d0d14', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '12px', color: 'white', width: '100%', marginBottom: '16px'}}
-        placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} />
+      <input
+        style={{background: '#0d0d14', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '10px', padding: '12px', color: 'white', width: '100%', marginBottom: '16px'}}
+        placeholder="Search..."
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+      />
       <motion.div style={{display: 'flex', flexDirection: 'column', gap: '12px'}} variants={staggerContainer} initial="initial" animate="animate">
         {filtered.length === 0 && <p style={{color: '#666', textAlign: 'center'}}>No tournaments found.</p>}
-        {filtered.map(t => (
-          <motion.div
-            key={t.id} variants={staggerItem}
-            whileHover={{ scale: 1.02, x: 3 }} whileTap={{ scale: 0.98 }} transition={{ duration: 0.25 }}
-            style={{background: '#16161f', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '16px', padding: '16px', borderLeft: `3px solid ${statusColor[t.status] || '#888'}`}}
-          >
-            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px'}}>
-              <div>
-                <h4 style={{fontSize: '15px', fontWeight: 700}}>{t.name}</h4>
-                <span style={{fontSize: '12px', color: statusColor[t.status], fontWeight: 600, textTransform: 'uppercase'}}>{t.status}</span>
-                <span style={{fontSize: '12px', color: 'var(--text-dim)', marginLeft: '10px'}}>{(registrationsByTournament[t.id] || []).length}/{t.max_players} joined</span>
+        {filtered.map(t => {
+          const count = registrationsByTournament[t.id]?.length || 0;
+          return (
+            <motion.div
+              key={t.id}
+              variants={staggerItem}
+              whileHover={{ scale: 1.02, x: 3 }}
+              whileTap={{ scale: 0.98 }}
+              transition={{ duration: 0.25 }}
+              style={{background: '#16161f', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '16px', padding: '16px', borderLeft: `3px solid ${statusColor[t.status] || '#888'}`}}
+            >
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px'}}>
+                <div>
+                  <h4 style={{fontSize: '15px', fontWeight: 700}}>{t.name}</h4>
+                  <span style={{fontSize: '12px', color: statusColor[t.status], fontWeight: 600, textTransform: 'uppercase'}}>{t.status}</span>
+                  <span style={{fontSize: '12px', color: 'var(--text-dim)', marginLeft: '10px'}}>Players: {count}/{t.max_players}</span>
+                </div>
+                <div style={{display: 'flex', gap: '8px'}}>
+                  <motion.button onClick={() => openEdit(t)} style={{background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#3b82f6', borderRadius: '8px', padding: '6px 10px'}} whileTap={{ scale: 0.9 }}><Edit size={14} /></motion.button>
+                  <motion.button onClick={() => handleDelete(t.id, t.name)} style={{background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: '8px', padding: '6px 10px'}} whileTap={{ scale: 0.9 }}><Trash2 size={14} /></motion.button>
+                </div>
               </div>
-              <div style={{display: 'flex', gap: '8px'}}>
-                <motion.button onClick={() => openEdit(t)} style={{background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.3)', color: '#3b82f6', borderRadius: '8px', padding: '6px 10px'}} whileTap={{ scale: 0.9 }}><Edit size={14} /></motion.button>
-                <motion.button onClick={() => handleDelete(t.id, t.name)} style={{background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', borderRadius: '8px', padding: '6px 10px'}} whileTap={{ scale: 0.9 }}><Trash2 size={14} /></motion.button>
-              </div>
-            </div>
-            <div style={{fontSize: '13px', color: 'var(--text-dim)'}}>₹{t.prize} Prize • Entry ₹{t.entry_fee}</div>
-            <div style={{fontSize: '12px', color: '#aaa', marginTop: '2px'}}>Match: {formatMatchDateTime(t.match_time)}</div>
-            {(registrationsByTournament[t.id] || []).length === 0 ? (
-  <div style={{ color: '#9ca3af', fontSize: '13px', marginTop: '8px' }}>
-    No players joined yet
-  </div>
-) : (
-  <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-    {(registrationsByTournament[t.id] || []).map((player) => (
-      <div key={player.id} style={{
-        background: '#0f0f17',
-        padding: '8px',
-        borderRadius: '8px'
-      }}>
-        <div style={{ color: '#fff', fontSize: '13px' }}>
-          {player.profiles?.username || 'player'}
-        </div>
-        <div style={{ color: '#9ca3af', fontSize: '12px' }}>
-          UID: {player.ff_uid || '-'}
-        </div>
-        <div style={{ color: '#9ca3af', fontSize: '12px' }}>
-          IGN: {player.ign || '-'}
-        </div>
-      </div>
-    ))}
-  </div>
-)}
-// ✅ DEFAULT DASHBOARD VIEW
-return (
-  <div className="view">
-    <motion.h2
-      initial={{ opacity: 0, y: -10 }}
-      animate={{ opacity: 1, y: 0 }}
-      style={{ fontSize: '24px', fontWeight: 800, marginBottom: '16px' }}
-    >
-      Admin Dashboard
-    </motion.h2>
+              <div style={{fontSize: '13px', color: 'var(--text-dim)'}}>₹{t.prize} Prize • Entry ₹{t.entry_fee}</div>
+              <div style={{fontSize: '12px', color: '#aaa', marginTop: '2px'}}>Match: {formatMatchDateTime(t.match_time)}</div>
 
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-      {adminStats.map((item, i) => (
-        <div
-          key={i}
-          style={{
-            padding: '16px',
-            borderRadius: '12px',
-            background: item.bg,
-            border: `1px solid ${item.border}`,
-            color: item.color
-          }}
-        >
-          <div style={{ fontSize: '20px', fontWeight: 'bold' }}>{item.value}</div>
-          <div style={{ fontSize: '12px' }}>{item.label}</div>
-        </div>
-      ))}
+              {count === 0 ? (
+                <div style={{ color: '#9ca3af', fontSize: '13px', marginTop: '8px' }}>
+                  No players joined yet
+                </div>
+              ) : (
+                <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {(registrationsByTournament[t.id] || []).map((player) => (
+                    <div
+                      key={player.id}
+                      style={{
+                        background: '#0f0f17',
+                        padding: '8px',
+                        borderRadius: '8px'
+                      }}
+                    >
+                      <div style={{ color: '#fff', fontSize: '13px' }}>
+                        {player.profiles?.username || 'player'}
+                      </div>
+                      <div style={{ color: '#9ca3af', fontSize: '12px' }}>
+                        UID: {player.ff_uid || '-'}
+                      </div>
+                      <div style={{ color: '#9ca3af', fontSize: '12px' }}>
+                        IGN: {player.ign || '-'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </motion.div>
+          );
+        })}
+      </motion.div>
     </div>
-  </div>
-);
+  );
+
+  return (
+    <div className="view">
+      <motion.h2
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        style={{ fontSize: '24px', fontWeight: 800, marginBottom: '16px' }}
+      >
+        Admin Dashboard
+      </motion.h2>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+        {adminStats.map((item, i) => (
+          <div
+            key={i}
+            style={{
+              padding: '16px',
+              borderRadius: '12px',
+              background: item.bg,
+              border: `1px solid ${item.border}`,
+              color: item.color
+            }}
+          >
+            <div style={{ fontSize: '20px', fontWeight: 'bold' }}>{item.value}</div>
+            <div style={{ fontSize: '12px' }}>{item.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: '10px' }}>
+        <motion.button className="btn btn-primary" onClick={() => setView('create')} whileTap={{ scale: 0.95 }}>
+          <Plus size={16} /> Create Tournament
+        </motion.button>
+        <motion.button className="btn btn-outline" onClick={() => setView('list')} whileTap={{ scale: 0.95 }}>
+          Manage List
+        </motion.button>
+      </div>
+    </div>
+  );
+}
 
 // ===== BOTTOM NAV =====
 function BottomNav({ currentView, setView, isAdmin }) {
@@ -1089,7 +1132,8 @@ function BottomNav({ currentView, setView, isAdmin }) {
             <motion.div
               className="nav-active-dot"
               layoutId="nav-indicator"
-              initial={{ scale: 0 }} animate={{ scale: 1 }}
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
               transition={{ type: 'spring', stiffness: 400, damping: 28 }}
             />
           )}

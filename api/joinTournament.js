@@ -6,9 +6,7 @@ const supabase = createClient(
 );
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
     const { userId, tournamentId, entryFee, ff_uid, ign } = req.body;
@@ -19,7 +17,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing data' });
     }
 
-    // 1. check duplicate join
     const { data: existingRegistration, error: existingRegistrationError } = await supabase
       .from('match_registrations')
       .select('id')
@@ -27,106 +24,54 @@ export default async function handler(req, res) {
       .eq('user_id', userId)
       .maybeSingle();
 
-    if (existingRegistrationError) {
-      return res.status(500).json({ error: existingRegistrationError.message });
-    }
+    if (existingRegistrationError) return res.status(500).json({ error: existingRegistrationError.message });
+    if (existingRegistration) return res.status(409).json({ error: 'You already joined this tournament', code: '23505' });
 
-    if (existingRegistration) {
-      return res.status(400).json({ error: 'You already joined this tournament' });
-    }
-
-    // 2. get profile
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('balance')
+      .select('id, balance')
       .eq('id', userId)
-      .single();
+      .maybeSingle();
 
-    if (profileError) {
-      return res.status(500).json({ error: profileError.message });
-    }
+    if (profileError) return res.status(500).json({ error: profileError.message });
+    if (!profile) return res.status(404).json({ error: 'Profile not found. Complete your profile first.' });
 
-    // 3. tournament capacity check
     const { data: tournament, error: tournamentError } = await supabase
       .from('tournaments')
       .select('id, current_players, max_players')
       .eq('id', tournamentId)
       .single();
 
-    if (tournamentError) {
-      return res.status(500).json({ error: tournamentError.message });
-    }
+    if (tournamentError) return res.status(500).json({ error: tournamentError.message });
+    if ((tournament.current_players || 0) >= tournament.max_players) return res.status(400).json({ error: 'Tournament is full' });
+    if (profile.balance < entryFee) return res.status(400).json({ error: 'Insufficient balance' });
 
-    if ((tournament.current_players || 0) >= tournament.max_players) {
-      return res.status(400).json({ error: 'Tournament is full' });
-    }
+    const { error: balErr } = await supabase.from('profiles').update({ balance: profile.balance - entryFee, ff_uid: safeFfUid, ign: safeIgn }).eq('id', userId);
+    if (balErr) return res.status(500).json({ error: balErr.message });
 
-    // 4. balance check
-    if (profile.balance < entryFee) {
-      return res.status(400).json({ error: 'Insufficient balance' });
-    }
-
-    const newBalance = profile.balance - entryFee;
-
-    // 5. update balance
-    const { error: balErr } = await supabase
-      .from('profiles')
-      .update({ balance: newBalance })
-      .eq('id', userId);
-
-    if (balErr) {
-      return res.status(500).json({ error: balErr.message });
-    }
-
-    // 6. insert registration
-    const { error: regErr } = await supabase
-      .from('match_registrations')
-      .insert({
-        tournament_id: tournamentId,
-        user_id: userId,
-        ff_uid: safeFfUid,
-        ign: safeIgn,
-        status: 'joined'
-      });
+    const { error: regErr } = await supabase.from('match_registrations').insert({
+      tournament_id: tournamentId,
+      user_id: userId,
+      ff_uid: safeFfUid,
+      ign: safeIgn,
+      status: 'joined'
+    });
 
     if (regErr) {
-      if (regErr.code === '23505') {
-        return res.status(409).json({ error: 'Already joined', code: '23505' });
-      }
+      if (regErr.code === '23505') return res.status(409).json({ error: 'Already joined', code: '23505' });
       return res.status(500).json({ error: 'Could not complete registration' });
     }
 
-    // 7. sync player count from latest registrations (avoids stale state/race issues)
-    const { count, error: countError } = await supabase
+    const { count } = await supabase
       .from('match_registrations')
       .select('id', { count: 'exact', head: true })
       .eq('tournament_id', tournamentId);
 
-    if (countError) {
-      return res.status(500).json({ error: 'Could not update player count' });
-    }
+    await supabase.from('tournaments').update({ current_players: count || 0 }).eq('id', tournamentId);
+    await supabase.from('transactions').insert({ user_id: userId, type: 'join', amount: entryFee, status: 'completed' });
 
-    const { error: playerCountErr } = await supabase
-      .from('tournaments')
-      .update({ current_players: count || 0 })
-      .eq('id', tournamentId);
-
-    if (playerCountErr) {
-      return res.status(500).json({ error: playerCountErr.message });
-    }
-
-    // 8. transaction
-    await supabase.from('transactions').insert({
-      user_id: userId,
-      type: 'join',
-      amount: entryFee,
-      status: 'completed'
-    });
-
-    // ✅ ALWAYS JSON RESPONSE
     return res.status(200).json({ success: true });
-
-  } catch (err) {
+  } catch (_err) {
     return res.status(500).json({ error: 'Server error while joining tournament' });
   }
 }

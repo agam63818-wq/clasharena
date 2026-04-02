@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Flame, Mail, Lock, Loader, LogIn, UserPlus, Trophy, Home, Wallet, User, Clock, Users } from 'lucide-react';
+import { Flame, Loader, Trophy, Home, Wallet, User, Clock, Users } from 'lucide-react';
 import supabase from './lib/supabaseClient';
 import MyMatches from './components/MyMatches';
 import Profile from './components/Profile';
+import LoginScreen from './components/LoginScreen';
+import SignupScreen from './components/SignupScreen';
 import './App.css';
 
 const pageVariants = {
@@ -19,64 +21,6 @@ const formatMatchDateTime = (value, fallback = 'TBA') => {
   return parsed.toLocaleString();
 };
 
-function LoginScreen({ onLogin }) {
-  const [identifier, setIdentifier] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleAuth = async (type) => {
-    const value = identifier.trim();
-    const normalizedPhone = value.replace(/\s|-/g, '');
-    const isPhone = /^\+?\d{10,15}$/.test(normalizedPhone);
-    const authPayload = isPhone ? { phone: normalizedPhone, password } : { email: value, password };
-
-    if (!value || !password) {
-      alert('Please enter email/phone and password.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      if (type === 'login') {
-        const { data, error } = await supabase.auth.signInWithPassword(authPayload);
-        if (error) throw error;
-        onLogin(data.session);
-      } else {
-        const { data, error } = await supabase.auth.signUp(authPayload);
-        if (error) throw error;
-        if (data.user) {
-          const defaultUsername = isPhone ? `user${normalizedPhone.slice(-4)}` : value.split('@')[0];
-          await supabase.from('profiles').upsert([{ id: data.user.id, username: defaultUsername, level: 1, wins: 0, balance: 0, ff_uid: '', ign: '', phone: isPhone ? normalizedPhone : '', is_admin: false }], { onConflict: 'id' });
-        }
-        alert('Account Created! Please login.');
-      }
-    } catch (error) {
-      alert(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="app-container">
-      <div className="mobile-frame">
-        <div className="login-page">
-          <div className="login-brand">
-            <Flame className="brand-icon" size={60} />
-            <h1>CLASH<span className="brand-highlight">ARENA</span></h1>
-          </div>
-          <div className="login-card">
-            <div className="input-group"><Mail size={20} className="input-icon" /><input type="text" placeholder="Email or Phone" value={identifier} onChange={(e) => setIdentifier(e.target.value)} className="form-input" /></div>
-            <div className="input-group"><Lock size={20} className="input-icon" /><input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} className="form-input" /></div>
-            <button onClick={() => handleAuth('login')} disabled={loading} className="btn btn-primary">{loading ? <Loader size={20} className="spin" /> : <LogIn size={20} />} Login</button>
-            <button onClick={() => handleAuth('signup')} disabled={loading} className="btn btn-outline"><UserPlus size={20} /> Create Account</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -84,6 +28,7 @@ export default function App() {
   const [currentView, setCurrentView] = useState('home');
   const [selectedTournament, setSelectedTournament] = useState(null);
   const [tournaments, setTournaments] = useState([]);
+  const [authView, setAuthView] = useState('login');
 
   useEffect(() => {
     const loadSession = async () => {
@@ -113,7 +58,26 @@ export default function App() {
   }, [session?.user?.id]);
 
   if (authLoading) return <div className="app-container"><div className="mobile-frame" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}><Loader className="spin" /></div></div>;
-  if (!session) return <LoginScreen onLogin={setSession} />;
+
+  if (!session) {
+    return (
+      <AnimatePresence mode="wait">
+        {authView === 'login' ? (
+          <LoginScreen
+            key="login-screen"
+            onLogin={setSession}
+            onOpenSignup={() => setAuthView('signup')}
+          />
+        ) : (
+          <SignupScreen
+            key="signup-screen"
+            onSignupComplete={() => setAuthView('login')}
+            onBackToLogin={() => setAuthView('login')}
+          />
+        )}
+      </AnimatePresence>
+    );
+  }
 
   const user = {
     name: userProfile?.username || 'player',

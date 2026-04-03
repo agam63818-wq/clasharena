@@ -1,11 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Flame, Mail, Lock, Loader, LogIn, UserPlus,
-  Trophy, Home, Wallet, User, Clock, Users
-} from 'lucide-react';
+import { Flame, Trophy, Home, Wallet, User, Loader } from 'lucide-react';
 
 import supabase from './lib/supabaseClient';
+import LoginScreen from './components/LoginScreen';
 import SignupScreen from './components/SignupScreen';
 import MyMatches from './components/MyMatches';
 import Profile from './components/Profile';
@@ -18,83 +16,10 @@ const pageVariants = {
 };
 
 const formatMatchDateTime = (value) => {
-  if (!value) return "TBA";
+  if (!value) return 'TBA';
   return new Date(value).toLocaleString();
 };
 
-// ================= LOGIN SCREEN =================
-function LoginScreen({ onLogin, goSignup }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  const handleLogin = async () => {
-    if (!email || !password) {
-      return alert("Email aur password daalo");
-    }
-
-    setLoading(true);
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    setLoading(false);
-
-    if (error) return alert(error.message);
-
-    onLogin(data.session);
-  };
-
-  return (
-    <div className="app-container">
-      <div className="mobile-frame">
-        <div className="login-page">
-          <div className="login-brand">
-            <Flame size={60} className="brand-icon" />
-            <h1>CLASH<span className="brand-highlight">ARENA</span></h1>
-          </div>
-
-          <motion.div
-            className="login-card"
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
-            <div className="input-group">
-              <Mail size={20} />
-              <input
-                placeholder="Email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-
-            <div className="input-group">
-              <Lock size={20} />
-              <input
-                type="password"
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-
-            <button className="btn btn-primary" onClick={handleLogin}>
-              {loading ? <Loader className="spin" /> : <LogIn />} Login
-            </button>
-
-            <button className="btn btn-outline" onClick={goSignup}>
-              <UserPlus /> Create Account
-            </button>
-          </motion.div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ================= MAIN APP =================
 export default function App() {
   const [session, setSession] = useState(null);
   const [authMode, setAuthMode] = useState('login');
@@ -114,8 +39,11 @@ export default function App() {
 
     init();
 
-    const { data: { subscription } } =
-      supabase.auth.onAuthStateChange((_e, s) => setSession(s));
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+    });
 
     return () => subscription.unsubscribe();
   }, []);
@@ -128,60 +56,66 @@ export default function App() {
   }, [session]);
 
   const fetchProfile = async () => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', session.user.id)
-      .single();
+    const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
 
     setUserProfile(data);
   };
 
   const fetchTournaments = async () => {
-    const { data } = await supabase
-      .from('tournaments')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const { data } = await supabase.from('tournaments').select('*').order('created_at', { ascending: false });
 
     setTournaments(data || []);
   };
 
-  // ================= AUTH =================
   if (loading) {
-    return <div className="app-container"><Loader className="spin" /></div>;
+    return (
+      <div className="app-container">
+        <Loader className="spin" />
+      </div>
+    );
   }
 
   if (!session) {
-    return authMode === 'login'
-      ? <LoginScreen
-          onLogin={setSession}
-          goSignup={() => setAuthMode('signup')}
-        />
-      : <SignupScreen
-          onBack={() => setAuthMode('login')}
-        />;
+    return (
+      <div className="app-container">
+        <div className="mobile-frame">
+          <AnimatePresence mode="wait">
+            {authMode === 'login' ? (
+              <motion.div key="login" {...pageVariants}>
+                <LoginScreen onLoginSuccess={setSession} onSwitchToSignup={() => setAuthMode('signup')} />
+              </motion.div>
+            ) : (
+              <motion.div key="signup" {...pageVariants}>
+                <SignupScreen
+                  onBackToLogin={() => setAuthMode('login')}
+                  onSignupSuccess={(nextSession) => setSession(nextSession)}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+    );
   }
 
   const user = {
-    name: userProfile?.username || "player",
+    name: userProfile?.username || 'player',
     avatar: `https://i.pravatar.cc/150?u=${session.user.id}`
   };
 
   return (
     <div className="app-container">
       <div className="mobile-frame">
-
         <Header user={user} balance={userProfile?.balance || 0} />
 
         <main className="main-content">
           <AnimatePresence mode="wait">
-
             {currentView === 'home' && (
               <motion.div key="home" {...pageVariants}>
                 <HomeView
                   tournaments={tournaments}
-                  onSelect={(t) => {
-                    setSelectedTournament(t);
+                  onSelect={(tournament) => {
+                    setSelectedTournament(tournament);
                     setCurrentView('tournament');
                   }}
                 />
@@ -190,10 +124,7 @@ export default function App() {
 
             {currentView === 'tournament' && (
               <motion.div key="tournament" {...pageVariants}>
-                <TournamentView
-                  tournament={selectedTournament}
-                  setView={setCurrentView}
-                />
+                <TournamentView tournament={selectedTournament} setView={setCurrentView} />
               </motion.div>
             )}
 
@@ -217,11 +148,11 @@ export default function App() {
                   onLogout={async () => {
                     await supabase.auth.signOut();
                     setSession(null);
+                    setAuthMode('login');
                   }}
                 />
               </motion.div>
             )}
-
           </AnimatePresence>
         </main>
 
@@ -230,8 +161,6 @@ export default function App() {
     </div>
   );
 }
-
-// ================= COMPONENTS =================
 
 function Header({ user, balance }) {
   return (
@@ -254,10 +183,10 @@ function HomeView({ tournaments, onSelect }) {
     <div className="view">
       <h2>Live Matches</h2>
 
-      {tournaments.map(t => (
-        <div key={t.id} onClick={() => onSelect(t)} className="card">
-          <h3>{t.name}</h3>
-          <p>{formatMatchDateTime(t.match_time)}</p>
+      {tournaments.map((tournament) => (
+        <div key={tournament.id} onClick={() => onSelect(tournament)} className="card">
+          <h3>{tournament.name}</h3>
+          <p>{formatMatchDateTime(tournament.match_time)}</p>
         </div>
       ))}
     </div>
@@ -296,9 +225,9 @@ function BottomNav({ currentView, setView }) {
 
   return (
     <nav className="bottom-nav">
-      {tabs.map(t => (
-        <button key={t.id} onClick={() => setView(t.id)}>
-          <t.icon />
+      {tabs.map((tab) => (
+        <button key={tab.id} onClick={() => setView(tab.id)}>
+          <tab.icon />
         </button>
       ))}
     </nav>

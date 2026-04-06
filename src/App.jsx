@@ -4,9 +4,10 @@ import {
   Flame, Mail, Lock, Loader, LogIn, UserPlus, LogOut,
   Trophy, Home, Wallet, User, Shield, Clock, Users, Plus, ChevronRight, Star,
   Settings, Edit, Trash2, MessageCircle, Youtube, Instagram, Search, X,
-  Eye, EyeOff, Gamepad2, Zap, AlertCircle, Phone
+  Eye, EyeOff, Gamepad2, Zap, AlertCircle, Phone, FileText
 } from 'lucide-react';
 import supabase from './lib/supabaseClient';
+import Terms from './pages/Terms';
 import './App.css';
 
 const formatMatchDateTime = (value, fallback = 'TBA') => {
@@ -86,11 +87,14 @@ function LoginScreen({ onLogin }) {
   const [activeTab, setActiveTab] = useState('login');
   const [error, setError] = useState('');
   const [focusedInput, setFocusedInput] = useState(null);
+  const [termsAgreed, setTermsAgreed] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
 
   const handleAuth = async (type) => {
     const value = identifier.trim();
     if (!value || !password) { setError('Please enter email and password'); return; }
     if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
+    if (type === 'signup' && !termsAgreed) { setError('Please agree to the Terms & Conditions to continue.'); return; }
     setError('');
     setLoading(true);
     try {
@@ -199,13 +203,43 @@ function LoginScreen({ onLogin }) {
             </button>
           </div>
 
+          <AnimatePresence>
+            {activeTab === 'signup' && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                exit={{ opacity: 0, height: 0 }}
+                style={{ overflow: 'hidden', marginTop: 4 }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '6px 0' }}>
+                  <input
+                    type="checkbox"
+                    checked={termsAgreed}
+                    onChange={e => setTermsAgreed(e.target.checked)}
+                    style={{ width: 16, height: 16, accentColor: 'var(--primary)', cursor: 'pointer' }}
+                  />
+                  <span style={{ fontSize: 13, color: '#aaa', lineHeight: 1.5 }}>
+                    I agree to the{' '}
+                    <button
+                      type="button"
+                      onClick={() => setShowTermsModal(true)}
+                      style={{ background: 'none', border: 'none', color: 'var(--primary)', fontWeight: 700, cursor: 'pointer', fontSize: 13, padding: 0, textDecoration: 'underline' }}
+                    >
+                      Terms &amp; Conditions
+                    </button>
+                  </span>
+                </label>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <motion.button
             className="btn btn-primary"
             onClick={() => handleAuth(activeTab)}
-            disabled={loading}
+            disabled={loading || (activeTab === 'signup' && !termsAgreed)}
             whileTap={{ scale: 0.97 }}
             whileHover={{ scale: 1.01 }}
-            style={{ marginTop: 8, overflow: 'hidden', position: 'relative' }}
+            style={{ marginTop: 8, overflow: 'hidden', position: 'relative', opacity: (activeTab === 'signup' && !termsAgreed) ? 0.5 : 1 }}
           >
             <motion.div
               style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent)', skewX: -12 }}
@@ -216,6 +250,34 @@ function LoginScreen({ onLogin }) {
           </motion.button>
         </div>
       </motion.div>
+
+      <AnimatePresence>
+        {showTermsModal && (
+          <motion.div
+            variants={modalBackdrop} initial="initial" animate="animate" exit="exit"
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 200, display: 'flex', flexDirection: 'column' }}
+            onClick={e => e.target === e.currentTarget && setShowTermsModal(false)}
+          >
+            <motion.div
+              variants={modalContent} initial="initial" animate="animate" exit="exit"
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', maxHeight: '100dvh', overflow: 'hidden' }}
+            >
+              <div style={{ overflowY: 'auto', flex: 1 }}>
+                <Terms onBack={() => setShowTermsModal(false)} />
+              </div>
+              <div style={{ padding: '16px 20px', background: 'var(--bg-dark)', borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+                <motion.button
+                  className="btn btn-primary"
+                  onClick={() => { setTermsAgreed(true); setShowTermsModal(false); }}
+                  whileTap={{ scale: 0.97 }}
+                >
+                  I Agree &amp; Continue
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -319,7 +381,13 @@ export default function App() {
                   profileData={userProfile}
                   onProfileUpdate={() => fetchProfile(session.user.id)}
                   onLogout={async () => { await supabase.auth.signOut(); }}
+                  setView={setCurrentView}
                 />
+              </motion.div>
+            )}
+            {currentView === 'terms' && (
+              <motion.div key="terms" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+                <Terms onBack={() => setCurrentView('profile')} />
               </motion.div>
             )}
             {currentView === 'admin' && (
@@ -594,7 +662,7 @@ function WalletView({ balance }) {
   );
 }
 
-function ProfileView({ user, profileData, onProfileUpdate, onLogout }) {
+function ProfileView({ user, profileData, onProfileUpdate, onLogout, setView }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ ff_id: user.ff_id, nickname: user.nickname });
@@ -646,6 +714,11 @@ function ProfileView({ user, profileData, onProfileUpdate, onLogout }) {
             </a>
           </motion.div>
         ))}
+        <motion.div variants={staggerItem}>
+          <motion.div className="menu-item" onClick={() => setView('terms')} whileHover={{ scale: 1.03, x: 4 }} whileTap={{ scale: 0.97 }} transition={{ duration: 0.25 }}>
+            <FileText size={20} color="var(--primary)" /> Terms &amp; Conditions <ChevronRight size={16} style={{ marginLeft: 'auto' }} />
+          </motion.div>
+        </motion.div>
         <motion.div variants={staggerItem}>
           <motion.div className="menu-item" style={{ color: '#ef4444' }} onClick={onLogout} whileHover={{ scale: 1.03, x: 4 }} whileTap={{ scale: 0.97 }}>
             <LogOut size={20} /> Logout

@@ -1,0 +1,83 @@
+Setup a complete Terms & Conditions system for my React + Vite app (ClashArena).
+
+Requirements:
+
+1. Create a new page:
+
+* File: src/pages/Terms.jsx
+* Route: /terms
+* Title: "Terms & Conditions"
+
+2. Design:
+
+* Dark theme matching existing UI
+* Mobile responsive
+* Scrollable content
+* Heading + sections styled cleanly
+
+3. Add full Terms & Conditions content:
+
+ClashArena – Terms & Conditions
+
+1. Eligibility
+   Users must be at least 18 years old to use this platform. By using this app, you confirm that you meet this requirement.
+
+2. Nature of Platform
+   ClashArena is a skill-based gaming platform. Outcomes depend on player skill, not chance.
+
+3. User Responsibility
+   Users are responsible for maintaining the confidentiality of their account details.
+
+4. Entry Fees & Rewards
+   Users may pay entry fees to participate in matches. Rewards are distributed based on match results.
+
+5. No Guarantee of Earnings
+   Winning is not guaranteed. Earnings depend entirely on user performance.
+
+6. Fraud & Misuse
+   Any fraudulent activity, including multiple accounts or unfair practices, will result in account suspension.
+
+7. Payments
+   All payments are processed through secure third-party providers. The platform is not responsible for payment gateway issues.
+
+8. Refund Policy
+   Entry fees are non-refundable once a match is joined.
+
+9. Account Suspension
+   We reserve the right to suspend or terminate accounts violating policies.
+
+10. Changes to Terms
+    We may update these terms at any time without prior notice.
+
+11. Contact
+    Add placeholder email: [support@clasharena.com](mailto:support@clasharena.com)
+
+12. Routing:
+
+* Add route in main router (App.jsx or routes file)
+* Ensure navigation works without reload
+
+5. Profile Page:
+
+* Add a button or link: "Terms & Conditions"
+* Clicking it should navigate to /terms
+
+6. Signup Page:
+
+* Add a checkbox:
+  "I agree to Terms & Conditions"
+* Disable signup button unless checked
+
+7. Optional Enhancement:
+
+* Add a modal popup version of Terms when clicking link in signup
+
+8. Ensure:
+
+* No console errors
+* Clean component structure
+* Proper imports
+
+9. Keep code clean, modular, and production-ready.
+
+Do not break existing UI or functionality.

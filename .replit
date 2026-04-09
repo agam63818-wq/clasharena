@@ -1,4 +1,4 @@
-run = "npm run dev -- --host"
+run = "npm run dev -- --host --port=5173"
 
 modules = ["nodejs-20"]
 

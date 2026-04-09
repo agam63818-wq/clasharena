@@ -997,6 +997,11 @@ return (
 );
 }
 
+const EMPTY_FORM = {
+  name: '', prize: '', entry_fee: '', mode: 'Solo', status: 'registration',
+  max_players: 100, match_time: '', room_id: '', room_password: '', image_url: '', rules: ''
+};
+
 function TournamentForm({ initial, onSave, onCancel, saving }) {
   const [form, setForm] = useState(initial || EMPTY_FORM);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));

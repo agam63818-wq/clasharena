@@ -434,6 +434,11 @@ export default function App() {
                 />
               </motion.div>
             )}
+            {currentView === 'myMatches' && (
+              <motion.div key="myMatches" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+                <MyMatchesView userId={session.user.id} setView={setCurrentView} />
+              </motion.div>
+            )}
             {currentView === 'terms' && (
               <motion.div key="terms" variants={pageVariants} initial="initial" animate="animate" exit="exit">
                 <Terms onBack={() => setCurrentView('profile')} />
@@ -1382,5 +1387,146 @@ function BottomNav({ currentView, setView, isAdmin }) {
         </motion.button>
       ))}
     </nav>
+  );
+}
+function MyMatchesView({ userId, setView }) {
+  const [matches, setMatches] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchMatches();
+  }, []);
+
+  const fetchMatches = async () => {
+    setLoading(true);
+
+    const { data, error } = await supabase
+      .from('match_registrations')
+      .select(`
+        id,
+        tournament_id,
+        tournaments (
+          id,
+          name,
+          prize,
+          entry_fee,
+          match_time,
+          status,
+          image_url
+        )
+      `)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error(error);
+      setLoading(false);
+      return;
+    }
+
+    setMatches(data || []);
+    setLoading(false);
+  };
+
+  return (
+    <div className="view" style={{ padding: '20px 16px' }}>
+
+      {/* HEADER */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
+        <button className="btn btn-outline" onClick={() => setView('profile')}>
+          ← Back
+        </button>
+        <h2 style={{ fontWeight: '800' }}>My Matches</h2>
+      </div>
+
+      {/* LOADING */}
+      {loading && (
+        <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
+          Loading matches...
+        </div>
+      )}
+
+      {/* EMPTY */}
+      {!loading && matches.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+          <Gamepad2 size={40} color="#444" />
+          <p style={{ marginTop: 10, color: '#888' }}>No matches joined yet</p>
+        </div>
+      )}
+
+      {/* MATCH LIST */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        {matches.map(m => {
+          const t = m.tournaments;
+
+          return (
+            <motion.div
+              key={m.id}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              style={{
+                borderRadius: '20px',
+                overflow: 'hidden',
+                background: '#111116',
+                border: '1px solid rgba(255,255,255,0.05)',
+                position: 'relative'
+              }}
+            >
+
+              {/* IMAGE */}
+              <div
+                style={{
+                  height: '120px',
+                  backgroundImage: `url(${t?.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e'})`,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center'
+                }}
+              >
+                <div style={{
+                  background: 'rgba(0,0,0,0.6)',
+                  height: '100%',
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                  padding: '10px'
+                }}>
+                  <span style={{
+                    background: t?.status === 'live' ? '#22c55e' :
+                                t?.status === 'upcoming' ? '#3b82f6' : '#f59e0b',
+                    padding: '4px 10px',
+                    borderRadius: '8px',
+                    fontSize: '12px',
+                    fontWeight: 'bold'
+                  }}>
+                    {t?.status || 'unknown'}
+                  </span>
+                </div>
+              </div>
+
+              {/* CONTENT */}
+              <div style={{ padding: '16px' }}>
+                <h3 style={{ marginBottom: '6px' }}>
+                  {t?.name || 'Unknown Match'}
+                </h3>
+
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  fontSize: '13px',
+                  color: '#aaa',
+                  marginBottom: '10px'
+                }}>
+                  <span>Prize ₹{t?.prize || 0}</span>
+                  <span>Entry ₹{t?.entry_fee || 0}</span>
+                </div>
+
+                <div style={{ fontSize: '12px', color: '#888' }}>
+                  ⏰ {t?.match_time ? new Date(t.match_time).toLocaleString() : 'TBA'}
+                </div>
+              </div>
+
+            </motion.div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

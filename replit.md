@@ -1,5 +1,17 @@
 # ClashArena
 
+## PERMANENT RULES — follow on every task
+
+1. Never expose service-role keys or secrets in frontend code, logs or commits. Never commit `.env`.
+2. Never trust client-supplied `userId`, `role`, `balance`, entry fee, transaction status or player counts.
+3. Hiding a UI button is never authorization. Admin checks happen server-side.
+4. No fake payments, no buttons that look functional but are not, no invented transactions or balances.
+5. Do not break working features. Keep API response shapes backward compatible. Work in small steps and run the build after each step.
+6. Do not claim a test/build passed unless you actually ran it and saw the output.
+7. Database-dependent features must sit behind feature flags (`src/config/features.js` for the client, env vars for the server) and degrade gracefully with an honest message when the DB piece is missing.
+
+## Project
+
 A Free Fire tournament mobile-style web app built with Vite + React.
 
 ## Tech Stack

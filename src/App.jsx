@@ -12,6 +12,8 @@ import {
   MessageCircle, Youtube, Instagram, Clock
 } from 'lucide-react';
 import supabase from './lib/supabaseClient';
+import { api, ApiError } from './lib/apiClient';
+import { features } from './config/features';
 import Terms from './pages/Terms';
 import './App.css';
 
@@ -348,8 +350,18 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  const [profileError, setProfileError] = useState('');
+
   const fetchProfile = async (userId) => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    if (error || !data) {
+      // Honest failure state (docs/AUDIT.md P1-5): never silently pretend a
+      // missing profile is fine — wallet/joins depend on it.
+      setUserProfile(null);
+      setProfileError('Could not load your profile. Wallet and match joins may not work — please log out and log in again.');
+      return;
+    }
+    setProfileError('');
     setUserProfile(data);
   };
 
@@ -360,7 +372,13 @@ export default function App() {
 
   const fetchTournaments = async () => {
     setTournamentsLoading(true);
-    const { data } = await supabase.from('tournaments').select('*').order('created_at', { ascending: false });
+    // With the room RPC flag on, room credentials are never fetched in list
+    // queries (docs/AUDIT.md P0-3); joined players get them via
+    // get_room_details() instead.
+    const columns = features.roomDetailsRpc
+      ? 'id, name, mode, prize, entry_fee, max_players, current_players, status, match_time, image_url, rules, created_at'
+      : '*';
+    const { data } = await supabase.from('tournaments').select(columns).order('created_at', { ascending: false });
     setTournaments(data || []);
     if (selectedTournament?.id) {
       const latest = (data || []).find(t => t.id === selectedTournament.id);
@@ -406,6 +424,11 @@ export default function App() {
     <div className="app-container">
       <div className="mobile-frame">
         <Header balance={userProfile?.balance || 0} user={user} />
+        {profileError && (
+          <div style={{ margin: '10px 16px 0', padding: '10px 12px', borderRadius: 10, background: 'rgba(239,68,68,0.12)', border: '1px solid #ef4444', color: '#fca5a5', fontSize: 13 }}>
+            {profileError}
+          </div>
+        )}
         <main className="main-content">
           <AnimatePresence mode="wait">
             {currentView === 'home' && (
@@ -420,7 +443,7 @@ export default function App() {
             )}
             {currentView === 'wallet' && (
               <motion.div key="wallet" variants={pageVariants} initial="initial" animate="animate" exit="exit">
-                <WalletView balance={userProfile?.balance || 0} />
+                <WalletView balance={userProfile?.balance || 0} userId={session.user.id} />
               </motion.div>
             )}
             {currentView === 'profile' && (
@@ -573,6 +596,28 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
       .then(({ data }) => { if (data) setAlreadyJoined(true); });
   }, [tournament, userProfile]);
 
+  // Room credentials via the get_room_details() RPC (flag-gated, default
+  // off). When off, room details keep coming from the tournament row exactly
+  // as before — enabling the flag is coordinated with the DB phase.
+  const [roomDetails, setRoomDetails] = useState(null);
+  useEffect(() => {
+    if (!features.roomDetailsRpc || !alreadyJoined || !tournament?.id) return;
+    let cancelled = false;
+    supabase
+      .rpc('get_room_details', { p_tournament_id: tournament.id })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error('get_room_details failed:', error.message);
+          setRoomDetails({ error: true });
+          return;
+        }
+        const row = Array.isArray(data) ? data[0] : data;
+        setRoomDetails({ error: false, roomId: row?.room_id ?? null, roomPassword: row?.room_password ?? null });
+      });
+    return () => { cancelled = true; };
+  }, [features.roomDetailsRpc, alreadyJoined, tournament?.id]);
+
   const handleJoin = async () => {
     if (joining) return;
     setJoinMessage('');
@@ -586,22 +631,20 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
       const { data: latest } = await supabase.from('tournaments').select('current_players, max_players').eq('id', tournament.id).single();
       if ((latest.current_players || 0) >= latest.max_players) { setJoinMessage('Match Full'); setJoinMessageType('error'); return; }
 
-      const response = await fetch('/api/joinTournament', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: userProfile.id, tournamentId: tournament.id, entryFee: tournament.entry_fee, ff_uid: joinData.ff_uid, ign: joinData.ign })
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        if (result?.code === '23505') { setAlreadyJoined(true); setShowJoinModal(false); return; }
-        throw new Error(result.error || 'Unable to join match right now.');
-      }
+      // Identity (userId) and entry fee are derived server-side from the
+      // verified session token and the tournaments table — never sent here.
+      await api.joinTournament({ tournamentId: tournament.id, ff_uid: joinData.ff_uid, ign: joinData.ign });
       setAlreadyJoined(true);
       setShowJoinModal(false);
       setJoinMessage('Successfully joined this match.');
       setJoinMessageType('success');
       await onJoinSuccess();
     } catch (err) {
+      if (err instanceof ApiError && err.code === '23505') {
+        setAlreadyJoined(true);
+        setShowJoinModal(false);
+        return;
+      }
       setJoinMessage(err?.message || 'Unable to join match right now.');
       setJoinMessageType('error');
     } finally {
@@ -610,6 +653,16 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
   };
 
   if (!tournament) return null;
+
+  const roomDisplay = features.roomDetailsRpc
+    ? {
+        id: roomDetails?.error ? 'Unavailable' : (roomDetails?.roomId || 'Wait...'),
+        password: roomDetails?.error ? 'Unavailable' : (roomDetails?.roomPassword || 'Wait...')
+      }
+    : {
+        id: tournament.room_id || 'Wait...',
+        password: tournament.room_password || 'Wait...'
+      };
 
   return (
     <div className="view detail-view">
@@ -650,8 +703,8 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid #22c55e', padding: 20, borderRadius: 16 }}>
               <h3 style={{ color: '#22c55e', marginBottom: 15, textAlign: 'center' }}>✅ Registered!</h3>
               <div className="info-grid" style={{ marginBottom: 15 }}>
-                <div className="info-item"><span className="label">Room ID</span><span className="value">{tournament.room_id || 'Wait...'}</span></div>
-                <div className="info-item"><span className="label">Password</span><span className="value">{tournament.room_password || 'Wait...'}</span></div>
+                <div className="info-item"><span className="label">Room ID</span><span className="value">{roomDisplay.id}</span></div>
+                <div className="info-item"><span className="label">Password</span><span className="value">{roomDisplay.password}</span></div>
               </div>
               <p style={{ textAlign: 'center', fontSize: 12, color: '#888' }}>Room details active 15 mins before match</p>
             </motion.div>
@@ -678,11 +731,42 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
   );
 }
 
-function WalletView({ balance }) {
+function WalletView({ balance, userId }) {
   const [transactions, setTransactions] = useState([]);
+  // loading | ready | unavailable | error — honest states (permanent rule 7)
+  const [txState, setTxState] = useState('loading');
+
   useEffect(() => {
-    supabase.from('transactions').select('*').order('created_at', { ascending: false }).then(({ data }) => setTransactions(data || []));
-  }, []);
+    if (!features.walletTransactions) {
+      setTxState('unavailable');
+      return;
+    }
+    if (!userId) {
+      setTxState('error');
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from('transactions')
+      .select('id, type, amount, created_at')
+      .eq('user_id', userId) // own transactions only (docs/AUDIT.md P0-5)
+      .order('created_at', { ascending: false })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          console.error('transactions query failed:', error.message);
+          setTxState('error');
+          return;
+        }
+        setTransactions(data || []);
+        setTxState('ready');
+      });
+    return () => { cancelled = true; };
+  }, [userId]);
+
+  // No payment provider is integrated yet: buttons stay disabled with an
+  // honest label — no fake UPI/WhatsApp instructions (permanent rule 4).
+  const paymentsReady = features.payments;
 
   return (
     <div className="view">
@@ -691,26 +775,29 @@ function WalletView({ balance }) {
         <p style={{ color: 'var(--text-dim)' }}>Total Balance</p>
         <motion.h1 initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.2, type: 'spring', stiffness: 200 }} style={{ color: 'var(--gold)', fontSize: 48, margin: '10px 0' }}>₹{balance}</motion.h1>
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-          <motion.button className="btn btn-primary" onClick={() => alert('UPI: yourupi@paytm\nSend screenshot on WhatsApp')} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>Add Money</motion.button>
-          <motion.button className="btn btn-outline" onClick={() => alert('Min ₹100\nWhatsApp: 9999999999')} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>Withdraw</motion.button>
+          <motion.button className="btn btn-primary" disabled={!paymentsReady} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }} style={{ opacity: paymentsReady ? 1 : 0.5, cursor: paymentsReady ? 'pointer' : 'not-allowed' }}>Add Money</motion.button>
+          <motion.button className="btn btn-outline" disabled={!paymentsReady} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }} style={{ opacity: paymentsReady ? 1 : 0.5, cursor: paymentsReady ? 'pointer' : 'not-allowed' }}>Withdraw</motion.button>
         </div>
+        {!paymentsReady && (
+          <p style={{ marginTop: 12, fontSize: 12, color: '#888' }}>Online payments and withdrawals are not available yet.</p>
+        )}
       </motion.div>
 
       <div style={{ marginTop: 20 }}>
         <h3 style={{ marginBottom: 10 }}>Transactions</h3>
-        {transactions.length === 0 ? (
-          <p style={{ color: '#666' }}>No transactions yet.</p>
-        ) : (
-          transactions.map(tx => (
-            <motion.div key={tx.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ background: '#16161f', padding: 12, borderRadius: 10, marginBottom: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>{tx.type}</span>
-                <span style={{ color: tx.amount < 0 ? 'red' : 'green' }}>₹{tx.amount}</span>
-              </div>
-              <small style={{ color: '#888' }}>{new Date(tx.created_at).toLocaleString()}</small>
-            </motion.div>
-          ))
-        )}
+        {txState === 'loading' && <p style={{ color: '#666' }}>Loading transactions...</p>}
+        {txState === 'unavailable' && <p style={{ color: '#666' }}>Transaction history is not available yet.</p>}
+        {txState === 'error' && <p style={{ color: '#fca5a5' }}>Could not load your transactions right now. Please try again later.</p>}
+        {txState === 'ready' && transactions.length === 0 && <p style={{ color: '#666' }}>No transactions yet.</p>}
+        {txState === 'ready' && transactions.length > 0 && transactions.map(tx => (
+          <motion.div key={tx.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ background: '#16161f', padding: 12, borderRadius: 10, marginBottom: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>{tx.type}</span>
+              <span style={{ color: tx.amount < 0 ? 'red' : 'green' }}>₹{tx.amount}</span>
+            </div>
+            <small style={{ color: '#888' }}>{new Date(tx.created_at).toLocaleString()}</small>
+          </motion.div>
+        ))}
       </div>
     </div>
   );
@@ -1138,14 +1225,12 @@ const handleUpdate = async (form) => {
   const handleDelete = async (id, name) => {
     if (!window.confirm(`Are you sure you want to delete "${name}"? This action cannot be undone.`)) return;
 
-    const response = await fetch('/api/deleteTournament', { 
-      method: 'POST', 
-      headers: { 'Content-Type': 'application/json' }, 
-      body: JSON.stringify({ tournamentId: id, userId }) 
-    });
-
-    const result = await response.json();
-    if (!response.ok) return alert('Error: ' + (result.error || 'Delete failed'));
+    try {
+      // Authorization is server-side (token + role); no userId is sent.
+      await api.deleteTournament({ tournamentId: id });
+    } catch (err) {
+      return alert('Error: ' + (err?.message || 'Delete failed'));
+    }
 
     setTournaments(tournaments.filter(t => t.id !== id));
     refreshList();

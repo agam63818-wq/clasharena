@@ -791,7 +791,7 @@ function WalletView({ balance, userId }) {
   // loading | ready | unavailable | error — honest states (permanent rule 7)
   const [txState, setTxState] = useState('loading');
 
-  useEffect(() => {
+  const refetch = () => {
     if (!features.walletTransactions) {
       setTxState('unavailable');
       return;
@@ -800,14 +800,13 @@ function WalletView({ balance, userId }) {
       setTxState('error');
       return;
     }
-    let cancelled = false;
+    setTxState('loading');
     supabase
       .from('transactions')
       .select('id, type, amount, created_at')
       .eq('user_id', userId) // own transactions only (docs/AUDIT.md P0-5)
       .order('created_at', { ascending: false })
       .then(({ data, error }) => {
-        if (cancelled) return;
         if (error) {
           console.error('transactions query failed:', error.message);
           setTxState('error');
@@ -816,7 +815,11 @@ function WalletView({ balance, userId }) {
         setTransactions(data || []);
         setTxState('ready');
       });
-    return () => { cancelled = true; };
+  };
+
+  useEffect(() => {
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
   // No payment provider is integrated yet: buttons stay disabled with an
@@ -825,35 +828,62 @@ function WalletView({ balance, userId }) {
 
   return (
     <div className="view">
-      <motion.h2 initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} style={{ fontSize: 24, fontWeight: 800, marginBottom: 20 }}>My Wallet</motion.h2>
-      <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.1, type: 'spring', stiffness: 200 }} style={{ background: 'linear-gradient(135deg, rgba(255,77,0,0.1), rgba(255,215,0,0.1))', border: '1px solid var(--primary)', borderRadius: 24, padding: 30, textAlign: 'center' }}>
-        <p style={{ color: 'var(--text-dim)' }}>Total Balance</p>
-        <motion.h1 initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.2, type: 'spring', stiffness: 200 }} style={{ color: 'var(--gold)', fontSize: 48, margin: '10px 0' }}>₹{balance}</motion.h1>
-        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-          <motion.button className="btn btn-primary" disabled={!paymentsReady} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }} style={{ opacity: paymentsReady ? 1 : 0.5, cursor: paymentsReady ? 'pointer' : 'not-allowed' }}>Add Money</motion.button>
-          <motion.button className="btn btn-outline" disabled={!paymentsReady} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }} style={{ opacity: paymentsReady ? 1 : 0.5, cursor: paymentsReady ? 'pointer' : 'not-allowed' }}>Withdraw</motion.button>
+      <h2 style={{ fontSize: 'var(--text-2xl)', fontWeight: 'var(--weight-extrabold)', marginBottom: 'var(--space-5)' }}>My Wallet</h2>
+      <section
+        aria-label="Balance"
+        style={{ background: 'linear-gradient(135deg, rgba(255,77,0,0.1), rgba(255,215,0,0.06))', border: '1px solid var(--accent-border)', borderRadius: 'var(--radius-2xl)', padding: 'var(--space-7) var(--space-5)', textAlign: 'center' }}
+      >
+        <p style={{ color: 'var(--text-secondary)' }}>Total Balance</p>
+        <p style={{ color: 'var(--gold)', fontSize: 'var(--text-4xl)', fontWeight: 'var(--weight-black)', margin: 'var(--space-2) 0' }}>{formatINR(balance)}</p>
+        <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-5)' }}>
+          <button type="button" className="btn btn-primary" disabled aria-label="Add money — coming soon">
+            Add Money <span className="visually-hidden">(coming soon)</span>
+          </button>
+          <button type="button" className="btn btn-outline" disabled aria-label="Withdraw — coming soon">
+            Withdraw <span className="visually-hidden">(coming soon)</span>
+          </button>
         </div>
-        {!paymentsReady && (
-          <p style={{ marginTop: 12, fontSize: 12, color: '#888' }}>Online payments and withdrawals are not available yet.</p>
-        )}
-      </motion.div>
+        <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
+          Online payments are coming soon. Buttons are disabled until then.
+        </p>
+      </section>
 
-      <div style={{ marginTop: 20 }}>
-        <h3 style={{ marginBottom: 10 }}>Transactions</h3>
-        {txState === 'loading' && <p style={{ color: '#666' }}>Loading transactions...</p>}
-        {txState === 'unavailable' && <p style={{ color: '#666' }}>Transaction history is not available yet.</p>}
-        {txState === 'error' && <p style={{ color: '#fca5a5' }}>Could not load your transactions right now. Please try again later.</p>}
-        {txState === 'ready' && transactions.length === 0 && <p style={{ color: '#666' }}>No transactions yet.</p>}
-        {txState === 'ready' && transactions.length > 0 && transactions.map(tx => (
-          <motion.div key={tx.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ background: '#16161f', padding: 12, borderRadius: 10, marginBottom: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>{tx.type}</span>
-              <span style={{ color: tx.amount < 0 ? 'red' : 'green' }}>₹{tx.amount}</span>
-            </div>
-            <small style={{ color: '#888' }}>{new Date(tx.created_at).toLocaleString()}</small>
-          </motion.div>
-        ))}
-      </div>
+      <section className="section" aria-label="Transaction history">
+        <div className="section-header"><h3>Transactions</h3></div>
+        {txState === 'loading' && (
+          <div role="status" aria-label="Loading transactions" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+            {[0, 1, 2].map(i => (
+              <span key={i} className="skeleton" style={{ display: 'block', height: 58, borderRadius: 'var(--radius-md)' }} />
+            ))}
+          </div>
+        )}
+        {txState === 'unavailable' && (
+          <EmptyState icon={FileText} title="Transaction history is not available yet" hint="Your match entries will be listed here." />
+        )}
+        {txState === 'error' && (
+          <ErrorRetry message="Could not load your transactions right now." onRetry={refetch} />
+        )}
+        {txState === 'ready' && transactions.length === 0 && (
+          <EmptyState icon={FileText} title="No transactions yet" hint="Entry fees you pay for matches will appear here." />
+        )}
+        {txState === 'ready' && transactions.length > 0 && (
+          <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+            {transactions.map(tx => (
+              <li key={tx.id} style={{ background: 'var(--bg-surface)', padding: 'var(--space-3) var(--space-4)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
+                  <span style={{ fontWeight: 'var(--weight-semibold)', textTransform: 'capitalize' }}>{tx.type}</span>
+                  <span
+                    style={{ color: Number(tx.amount) < 0 ? 'var(--danger-text)' : 'var(--success-text)', fontWeight: 'var(--weight-bold)' }}
+                  >
+                    {Number(tx.amount) < 0 ? '-' : '+'}{formatINR(Math.abs(Number(tx.amount)))}
+                  </span>
+                </div>
+                <small style={{ color: 'var(--text-muted)' }}>{formatDateTime(tx.created_at)}</small>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

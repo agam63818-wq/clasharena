@@ -15,6 +15,8 @@ import supabase from './lib/supabaseClient';
 import { api, ApiError } from './lib/apiClient';
 import { features } from './config/features';
 import { formatINR, formatDateTime } from './lib/format';
+import { txSign, txAmount, totalPages, pageRange } from './lib/transactions';
+import { support, supportConfigured, whatsappLink } from './config/support';
 import Avatar from './components/Avatar';
 import StatusBadge from './components/StatusBadge';
 import EmptyState from './components/EmptyState';
@@ -141,13 +143,18 @@ function LoginScreen({ onLogin }) {
       return;
     }
 
+    // `role` is deliberately NOT sent: the profile's role must come from the
+    // database (column default 'user' + the protect_profiles_columns trigger
+    // in supabase/proposed/003_functions_triggers.sql). See the DB-phase note
+    // in docs/DB_REQUIREMENTS.md §2.1 — until the RLS/trigger part is applied,
+    // this insert is still an anon-key write and the database is the only
+    // place that can refuse a forged role/balance.
     const { error: profileError } = await supabase
       .from('profiles')
       .insert([{
         id: data.user.id,
         username: username || value.split('@')[0],
-        phone: phone || null,
-        role: 'user'
+        phone: phone || null
       }]);
 
     // ✅ error handling (IMPORTANT)
@@ -217,30 +224,32 @@ function LoginScreen({ onLogin }) {
           </AnimatePresence>
 
           <div className="input-group">
-            <Mail size={20} className="input-icon" />
-            <input className="form-input" placeholder="Email" value={identifier} onChange={e => setIdentifier(e.target.value)} onFocus={() => setFocusedInput('id')} onBlur={() => setFocusedInput(null)} autoComplete="email" />
+            <Mail size={20} className="input-icon" aria-hidden="true" />
+            {/* The visual design uses an icon + placeholder instead of a <label>;
+                a placeholder is not an accessible name, so it is set explicitly. */}
+            <input className="form-input" placeholder="Email" aria-label="Email address" value={identifier} onChange={e => setIdentifier(e.target.value)} onFocus={() => setFocusedInput('id')} onBlur={() => setFocusedInput(null)} autoComplete="email" />
           </div>
 
           <AnimatePresence>
             {activeTab === 'signup' && (
               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
                 <div className="input-group">
-                  <User size={20} className="input-icon" />
-                  <input className="form-input" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" />
+                  <User size={20} className="input-icon" aria-hidden="true" />
+                  <input className="form-input" placeholder="Username" aria-label="Username" value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" />
                 </div>
                 <div className="input-group">
-                  <Phone size={20} className="input-icon" />
-                  <input className="form-input" placeholder="Phone Number" value={phone} onChange={e => setPhone(e.target.value)} autoComplete="tel" />
+                  <Phone size={20} className="input-icon" aria-hidden="true" />
+                  <input className="form-input" placeholder="Phone Number" aria-label="Phone number" value={phone} onChange={e => setPhone(e.target.value)} autoComplete="tel" />
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
 
           <div className="input-group" style={{ position: 'relative' }}>
-            <Lock size={20} className="input-icon" />
-            <input className="form-input" type={showPassword ? 'text' : 'password'} placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} onFocus={() => setFocusedInput('pw')} onBlur={() => setFocusedInput(null)} autoComplete={activeTab === 'login' ? 'current-password' : 'new-password'} style={{ paddingRight: 48 }} />
-            <button type="button" onClick={() => setShowPassword(v => !v)} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#888', cursor: 'pointer' }}>
-              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            <Lock size={20} className="input-icon" aria-hidden="true" />
+            <input className="form-input" type={showPassword ? 'text' : 'password'} placeholder="Password" aria-label={activeTab === 'login' ? 'Password' : 'New password'} value={password} onChange={e => setPassword(e.target.value)} onFocus={() => setFocusedInput('pw')} onBlur={() => setFocusedInput(null)} autoComplete={activeTab === 'login' ? 'current-password' : 'new-password'} style={{ paddingRight: 48 }} />
+            <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#888', cursor: 'pointer' }}>
+              {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
             </button>
           </div>
 
@@ -388,6 +397,10 @@ export default function App() {
 
   useEffect(() => {
     if (session?.user?.id) fetchTournaments();
+    // Intentional: one fetch per authenticated session. fetchTournaments is
+    // re-created on every render (it closes over selectedTournament), and adding it
+    // here would refetch on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per session, see note above
   }, [session?.user?.id]);
 
   if (authLoading) return (
@@ -614,6 +627,10 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
         setRoomDetails({ error: false, roomId: row?.room_id ?? null, roomPassword: row?.room_password ?? null });
       });
     return () => { cancelled = true; };
+    // features.* lives on a module-level constant object, so the rule calls it
+    // an "outer scope value" — but the guard above reads it, and keeping it in
+    // the list is what makes the effect re-run if that ever becomes dynamic.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see note above
   }, [features.roomDetailsRpc, alreadyJoined, tournament?.id]);
 
   // Client-side mirror of the server's validation (api/_lib/validate.js) —
@@ -791,10 +808,33 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
   );
 }
 
+// Status labels for wallet requests (the row status is always the server's).
+const WALLET_REQUEST_STATUS = {
+  pending: { label: 'Pending review', className: 'badge--upcoming' },
+  approved: { label: 'Approved', className: 'badge--completed' },
+  rejected: { label: 'Rejected', className: 'badge--cancelled' }
+};
+
 function WalletView({ balance, userId }) {
   const [transactions, setTransactions] = useState([]);
   // loading | ready | unavailable | error — honest states (permanent rule 7)
   const [txState, setTxState] = useState('loading');
+  const [txPage, setTxPage] = useState(1);
+  const [txTotal, setTxTotal] = useState(0);
+
+  // --- wallet requests -----------------------------------------------------
+  // The client flag decides whether the UI exists at all; the server flag
+  // (ENABLE_WALLET_REQUESTS) and the wallet_requests table decide whether it
+  // can actually work. Anything missing degrades to an honest message.
+  const [requests, setRequests] = useState([]);
+  const [requestsState, setRequestsState] = useState(features.walletRequests ? 'loading' : 'off');
+  const [requestsMessage, setRequestsMessage] = useState('');
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [requestType, setRequestType] = useState('deposit');
+  const [requestForm, setRequestForm] = useState({ amount: '', reference: '', note: '' });
+  const [requestError, setRequestError] = useState('');
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+  const [requestFeedback, setRequestFeedback] = useState('');
 
   const refetch = () => {
     if (!features.walletTransactions) {
@@ -806,30 +846,124 @@ function WalletView({ balance, userId }) {
       return;
     }
     setTxState('loading');
+    const { from, to } = pageRange(txPage - 1);
     supabase
       .from('transactions')
-      .select('id, type, amount, created_at')
+      .select('id, type, amount, created_at', { count: 'exact' })
       .eq('user_id', userId) // own transactions only (docs/AUDIT.md P0-5)
       .order('created_at', { ascending: false })
-      .then(({ data, error }) => {
+      .range(from, to)
+      .then(({ data, error, count }) => {
         if (error) {
           console.error('transactions query failed:', error.message);
           setTxState('error');
           return;
         }
         setTransactions(data || []);
+        setTxTotal(Number(count) || 0);
         setTxState('ready');
+      });
+  };
+
+  const loadRequests = () => {
+    if (!features.walletRequests) {
+      setRequestsState('off');
+      return;
+    }
+    setRequestsState('loading');
+    setRequestsMessage('');
+    api.listWalletRequests()
+      .then((result) => {
+        setRequests((result && result.requests) || []);
+        setRequestsState('ready');
+      })
+      .catch((err) => {
+        // 503 = the server or the database object is missing. Say so, and
+        // never pretend the feature works (permanent rule 7).
+        if (err && err.status === 503) {
+          setRequestsMessage(err.message);
+          setRequestsState('unavailable');
+          return;
+        }
+        if (err && err.status === 401) {
+          setRequestsMessage('Your session expired. Please log in again.');
+          setRequestsState('unavailable');
+          return;
+        }
+        setRequestsMessage((err && err.message) || 'Could not load your requests right now.');
+        setRequestsState('error');
       });
   };
 
   useEffect(() => {
     refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, txPage]);
+
+  useEffect(() => {
+    loadRequests();
   }, [userId]);
 
-  // No payment provider is integrated yet: buttons stay disabled with an
+  useEffect(() => {
+    if (!requestFeedback) return undefined;
+    const timer = setTimeout(() => setRequestFeedback(''), 5000);
+    return () => clearTimeout(timer);
+  }, [requestFeedback]);
+
+  const openRequest = (type) => {
+    setRequestType(type);
+    setRequestForm({ amount: '', reference: '', note: '' });
+    setRequestError('');
+    setShowRequestModal(true);
+  };
+
+  const submitRequest = async (e) => {
+    e.preventDefault();
+    setRequestError('');
+
+    const amount = Number(requestForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setRequestError('Enter an amount greater than 0.');
+      return;
+    }
+    // The server holds the authoritative limits (₹1 – ₹50,000, rate limit).
+    if (requestType === 'withdraw' && amount > Number(balance)) {
+      setRequestError('You cannot request more than your current balance.');
+      return;
+    }
+
+    setSubmittingRequest(true);
+    try {
+      await api.createWalletRequest({
+        type: requestType,
+        amount,
+        reference: requestForm.reference,
+        note: requestForm.note
+      });
+      setShowRequestModal(false);
+      setRequestFeedback(
+        `${requestType === 'deposit' ? 'Deposit' : 'Withdraw'} request submitted. ` +
+          'It is pending admin review — your balance changes only after approval.'
+      );
+      loadRequests();
+    } catch (err) {
+      setRequestError((err && err.message) || 'Could not submit your request right now.');
+      if (err && err.status === 503) {
+        // The feature is not set up on this server: reflect that immediately.
+        setShowRequestModal(false);
+        setRequestsMessage(err.message);
+        setRequestsState('unavailable');
+      }
+    } finally {
+      setSubmittingRequest(false);
+    }
+  };
+
+  // No payment provider and no request backend: buttons stay disabled with an
   // honest label — no fake UPI/WhatsApp instructions (permanent rule 4).
-  const paymentsReady = features.payments;
+  const requestsReady = features.walletRequests && (requestsState === 'ready' || requestsState === 'loading' || requestsState === 'error');
+  const requestsUnavailable = features.walletRequests && requestsState === 'unavailable';
+  const pages = totalPages(txTotal);
 
   return (
     <div className="view">
@@ -841,17 +975,84 @@ function WalletView({ balance, userId }) {
         <p style={{ color: 'var(--text-secondary)' }}>Total Balance</p>
         <p style={{ color: 'var(--gold)', fontSize: 'var(--text-4xl)', fontWeight: 'var(--weight-black)', margin: 'var(--space-2) 0' }}>{formatINR(balance)}</p>
         <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-5)' }}>
-          <button type="button" className="btn btn-primary" disabled aria-label="Add money — coming soon">
-            Add Money <span className="visually-hidden">(coming soon)</span>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!requestsReady}
+            onClick={() => openRequest('deposit')}
+            aria-label={features.walletRequests ? 'Request a deposit' : 'Add money — coming soon'}
+          >
+            Add Money {!features.walletRequests && <span className="visually-hidden">(coming soon)</span>}
           </button>
-          <button type="button" className="btn btn-outline" disabled aria-label="Withdraw — coming soon">
-            Withdraw <span className="visually-hidden">(coming soon)</span>
+          <button
+            type="button"
+            className="btn btn-outline"
+            disabled={!requestsReady}
+            onClick={() => openRequest('withdraw')}
+            aria-label={features.walletRequests ? 'Request a withdrawal' : 'Withdraw — coming soon'}
+          >
+            Withdraw {!features.walletRequests && <span className="visually-hidden">(coming soon)</span>}
           </button>
         </div>
-        <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
-          Online payments are coming soon. Buttons are disabled until then.
-        </p>
+        {!features.walletRequests && (
+          <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
+            Online payments are coming soon. Buttons are disabled until then.
+          </p>
+        )}
+        {requestsReady && (
+          <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
+            Requests are reviewed by an admin. Submitting one never changes your balance — only an approval does.
+          </p>
+        )}
+        {requestsUnavailable && (
+          <p className="feedback feedback--error" role="status" style={{ marginTop: 'var(--space-4)' }}>
+            <AlertCircle size={16} aria-hidden="true" /> {requestsMessage}
+          </p>
+        )}
       </section>
+
+      {requestFeedback && (
+        <div className="feedback feedback--success" role="status" style={{ marginTop: 'var(--space-4)' }}>
+          <CheckCircle2 size={16} aria-hidden="true" /> {requestFeedback}
+        </div>
+      )}
+
+      {features.walletRequests && (requestsState === 'ready' || requestsState === 'error') && (
+        <section className="section" aria-label="Wallet requests">
+          <div className="section-header"><h3>Your requests</h3></div>
+          {requestsState === 'error' && (
+            <ErrorRetry message={requestsMessage || 'Could not load your requests right now.'} onRetry={loadRequests} />
+          )}
+          {requestsState === 'ready' && requests.length === 0 && (
+            <EmptyState icon={Wallet} title="No requests yet" hint="Deposit and withdraw requests you submit will be listed here with their review status." />
+          )}
+          {requestsState === 'ready' && requests.length > 0 && (
+            <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+              {requests.map(req => {
+                const meta = WALLET_REQUEST_STATUS[req.status] || { label: req.status, className: 'badge--unknown' };
+                return (
+                  <li key={req.id} style={{ background: 'var(--bg-surface)', padding: 'var(--space-3) var(--space-4)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 'var(--weight-semibold)', textTransform: 'capitalize' }}>{req.type}</span>
+                      <span className={`badge ${meta.className}`}>{meta.label}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', marginTop: 4 }}>
+                      <small style={{ color: 'var(--text-muted)' }}>{formatDateTime(req.created_at)}</small>
+                      <span style={{ fontWeight: 'var(--weight-bold)' }}>{formatINR(Number(req.amount) || 0)}</span>
+                    </div>
+                    {req.reference && (
+                      <small style={{ color: 'var(--text-muted)', display: 'block' }}>Reference: {req.reference}</small>
+                    )}
+                    {req.admin_note && (
+                      <small style={{ color: 'var(--text-secondary)', display: 'block' }}>Admin note: {req.admin_note}</small>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      )}
 
       <section className="section" aria-label="Transaction history">
         <div className="section-header"><h3>Transactions</h3></div>
@@ -872,23 +1073,138 @@ function WalletView({ balance, userId }) {
           <EmptyState icon={FileText} title="No transactions yet" hint="Entry fees you pay for matches will appear here." />
         )}
         {txState === 'ready' && transactions.length > 0 && (
-          <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-            {transactions.map(tx => (
-              <li key={tx.id} style={{ background: 'var(--bg-surface)', padding: 'var(--space-3) var(--space-4)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
-                  <span style={{ fontWeight: 'var(--weight-semibold)', textTransform: 'capitalize' }}>{tx.type}</span>
-                  <span
-                    style={{ color: Number(tx.amount) < 0 ? 'var(--danger-text)' : 'var(--success-text)', fontWeight: 'var(--weight-bold)' }}
-                  >
-                    {Number(tx.amount) < 0 ? '-' : '+'}{formatINR(Math.abs(Number(tx.amount)))}
-                  </span>
-                </div>
-                <small style={{ color: 'var(--text-muted)' }}>{formatDateTime(tx.created_at)}</small>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+              {transactions.map(tx => {
+                // Sign comes from the transaction TYPE (interim — the DB phase
+                // stores signed amounts; see src/lib/transactions.js).
+                const sign = txSign(tx);
+                return (
+                  <li key={tx.id} style={{ background: 'var(--bg-surface)', padding: 'var(--space-3) var(--space-4)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
+                      <span style={{ fontWeight: 'var(--weight-semibold)', textTransform: 'capitalize' }}>{tx.type}</span>
+                      <span style={{ color: sign < 0 ? 'var(--danger-text)' : 'var(--success-text)', fontWeight: 'var(--weight-bold)' }}>
+                        {sign < 0 ? '−' : sign > 0 ? '+' : ''}{formatINR(txAmount(tx))}
+                      </span>
+                    </div>
+                    <small style={{ color: 'var(--text-muted)' }}>{formatDateTime(tx.created_at)}</small>
+                  </li>
+                );
+              })}
+            </ul>
+            {(pages > 1 || txPage > 1) && (
+              <nav aria-label="Transaction pages" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'var(--space-4)', gap: 'var(--space-3)' }}>
+                <button
+                  type="button"
+                  className="btn btn-outline btn--sm"
+                  onClick={() => setTxPage(p => Math.max(1, p - 1))}
+                  disabled={txPage <= 1}
+                >
+                  Newer
+                </button>
+                <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
+                  Page {txPage} of {pages}
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-outline btn--sm"
+                  onClick={() => setTxPage(p => p + 1)}
+                  disabled={txPage >= pages}
+                >
+                  Older
+                </button>
+              </nav>
+            )}
+          </>
         )}
       </section>
+
+      <Modal open={showRequestModal} onClose={() => !submittingRequest && setShowRequestModal(false)} title={requestType === 'deposit' ? 'Request a deposit' : 'Request a withdrawal'}>
+        <form onSubmit={submitRequest} noValidate>
+          <div className="field">
+            <label className="field-label" htmlFor="wr-type">Type</label>
+            <select id="wr-type" className="input" value={requestType} onChange={e => setRequestType(e.target.value)}>
+              <option value="deposit">Deposit (add money)</option>
+              <option value="withdraw">Withdraw</option>
+            </select>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="wr-amount">Amount (INR) *</label>
+            <input
+              id="wr-amount"
+              className="input"
+              type="number"
+              min="1"
+              step="1"
+              inputMode="numeric"
+              value={requestForm.amount}
+              onChange={e => setRequestForm(f => ({ ...f, amount: e.target.value }))}
+              required
+            />
+            <p className="field-hint">Between ₹1 and ₹50,000 per request. A maximum number of requests per hour applies.</p>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="wr-reference">{requestType === 'deposit' ? 'Payment reference (UPI/txn id)' : 'Payout reference (UPI id)'}</label>
+            <input
+              id="wr-reference"
+              className="input"
+              value={requestForm.reference}
+              onChange={e => setRequestForm(f => ({ ...f, reference: e.target.value }))}
+              maxLength={64}
+              autoComplete="off"
+            />
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="wr-note">Note (optional)</label>
+            <textarea
+              id="wr-note"
+              className="input"
+              rows="2"
+              value={requestForm.note}
+              onChange={e => setRequestForm(f => ({ ...f, note: e.target.value }))}
+              maxLength={300}
+            />
+          </div>
+
+          <div style={{ background: 'var(--bg-inset)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+            {supportConfigured ? (
+              <>
+                <strong style={{ color: 'var(--text-primary)' }}>Support</strong>
+                <div style={{ marginTop: 4 }}>
+                  {support.upi && <>UPI (display only): <code>{support.upi}</code><br /></>}
+                  {support.whatsapp && (
+                    <>
+                      WhatsApp: <a href={whatsappLink(support.whatsapp, 'ClashArena wallet request')} target="_blank" rel="noopener noreferrer">{support.whatsapp}</a>
+                    </>
+                  )}
+                </div>
+                <p style={{ marginTop: 6, color: 'var(--text-muted)' }}>
+                  These details are public contact info. A UPI ID is shown for reference only — it is never used to
+                  verify a payment. Approval is a manual admin decision.
+                </p>
+              </>
+            ) : (
+              <span>Support contact is not configured on this deployment yet. Your request is still recorded and reviewed by an admin.</span>
+            )}
+          </div>
+
+          {requestError && (
+            <p className="feedback feedback--error" role="alert" style={{ marginTop: 'var(--space-3)' }}>
+              <AlertCircle size={16} aria-hidden="true" /> {requestError}
+            </p>
+          )}
+
+          <div className="modal-actions" style={{ marginTop: 'var(--space-5)' }}>
+            <button type="submit" className="btn btn-primary" disabled={submittingRequest}>
+              {submittingRequest ? <Loader size={16} className="spin" aria-hidden="true" /> : <Wallet size={16} aria-hidden="true" />}
+              {submittingRequest ? 'Submitting…' : 'Submit request'}
+            </button>
+            <button type="button" className="btn btn-outline" onClick={() => setShowRequestModal(false)} disabled={submittingRequest}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

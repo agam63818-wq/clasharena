@@ -227,6 +227,24 @@ describe('POST /api/joinTournament — business rules (legacy path)', () => {
     expect(res.body.error).toMatch(/ended/i);
   });
 
+  it('409 when the match has been cancelled — and nothing is charged', async () => {
+    const calls = setup([
+      {
+        match: selectSingle('tournaments'),
+        value: { data: { ...TOURNAMENT_ROW, status: 'cancelled' }, error: null }
+      }
+    ]);
+    const res = makeRes();
+    await joinHandler(makeReq({ token: 'tok-A', body: joinBody() }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toMatch(/cancelled/i);
+    // No balance write, no registration, no ledger row.
+    expect(calls.filter((c) => c.table === 'profiles')).toHaveLength(0);
+    expect(calls.filter((c) => c.table === 'match_registrations')).toHaveLength(0);
+    expect(calls.filter((c) => c.table === 'transactions')).toHaveLength(0);
+  });
+
   it('404 when the tournament does not exist', async () => {
     setup([
       { match: selectSingle('tournaments'), value: { data: null, error: { message: 'row not found' } } }
@@ -270,7 +288,7 @@ describe('POST /api/joinTournament — JOIN_USE_RPC=true', () => {
     process.env.JOIN_USE_RPC = 'true';
   });
 
-  it('200 via the atomic RPC on success', async () => {
+  it('200 via the atomic RPC on success, passing the VERIFIED user id as p_user_id', async () => {
     const calls = setup([{ match: (c) => c.kind === 'rpc', value: { success: true } }]);
     const res = makeRes();
     await joinHandler(makeReq({ token: 'tok-A', body: joinBody() }), res);
@@ -278,17 +296,45 @@ describe('POST /api/joinTournament — JOIN_USE_RPC=true', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ success: true });
     expect(calls[0].fn).toBe('join_tournament');
+    // The service-role client has no JWT (auth.uid() is NULL inside the
+    // function), so the identity MUST travel as p_user_id — and it must be the
+    // token subject, not anything from the body.
+    expect(calls[0].args.p_user_id).toBe(USER_A.id);
     expect(calls[0].args).toEqual({
+      p_user_id: USER_A.id,
       p_tournament_id: TOURNAMENT_ID,
       p_ff_uid: '123456789',
       p_ign: 'TestPlayer'
     });
   });
 
+  it('RPC: a body userId cannot override the token subject', async () => {
+    const calls = setup([{ match: (c) => c.kind === 'rpc', value: { success: true } }]);
+    const res = makeRes();
+    await joinHandler(
+      makeReq({ token: 'tok-A', body: joinBody({ userId: USER_B.id, p_user_id: USER_B.id }) }),
+      res
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(calls[0].args.p_user_id).toBe(USER_A.id);
+    expect(JSON.stringify(calls)).not.toContain(USER_B.id);
+  });
+
+  it('RPC: 401 when there is no valid token (never reaches the function)', async () => {
+    const calls = setup([{ match: (c) => c.kind === 'rpc', value: { success: true } }]);
+    const res = makeRes();
+    await joinHandler(makeReq({ body: joinBody() }), res);
+    expect(res.statusCode).toBe(401);
+    expect(calls).toHaveLength(0);
+  });
+
   it.each([
     ['Tournament is full', 400],
     ['Insufficient balance', 400],
     ['You already joined this tournament', 409],
+    ['This match has been cancelled', 409],
+    ['This match has already ended', 409],
     ['Tournament not found', 404]
   ])('maps RPC error "%s" to HTTP %i', async (message, status) => {
     setup([{ match: (c) => c.kind === 'rpc', value: { error: message } }]);

@@ -17,6 +17,34 @@
 
 Verification: `npm test` → 38/38 passed (API routes, apiClient, feature flags; Supabase fully mocked). `npm run build` → vite build succeeded.
 
+### Round 2 — RPC integration, server-side admin, signup role (2026-10-13)
+
+| Item | Status |
+|---|---|
+| **RPC integration bug (P0-6 path)** | **Fixed in code + SQL** — `join_tournament` now takes `p_user_id uuid` and no longer uses `auth.uid()`; the API passes the id it verified from the bearer token (`api/joinTournament.js` → `joinViaRpc(res, supabase, user.id, …)`). EXECUTE revoked from `public, anon, authenticated` and granted to `service_role` only; the obsolete `(uuid, text, text)` overload is dropped. Cancelled/completed matches are rejected inside the function; the ledger insert is checked (raises → whole transaction rolls back). |
+| **`get_room_details`** | **Unchanged by design, now documented** — it is called from the browser with the user JWT, so `auth.uid()` stays and it keeps its `authenticated` grant (docs/DB_REQUIREMENTS.md §3.2; in-file caller contract in `supabase/proposed/003_functions_triggers.sql` §3). |
+| **Legacy join status guard** | **Fixed** — `status = 'cancelled'` now returns `409 This match has been cancelled. You have not been charged.` before any write (it previously joined a void match). |
+| **Server-side admin (P1-2, P2-1)** | **Fixed in code** — one router, `api/admin.js` (`createTournament`, `updateTournament`, `listRegistrations`; single file, Vercel Hobby 12-function limit), `requireAdmin` on every action with the role read from `profiles`, full server-side validation, status-transition rules, capacity check against the DB's `current_players`, safe error messages. `AdminView.jsx` calls it through `src/lib/apiClient.js`; no UI redesign. `api/deleteTournament.js` unchanged. `current_players` is no longer client-writable. |
+| **Signup role (P0-4 client half)** | **Fixed in code** — the signup profile insert no longer sends `role`; the value must come from the column default / protection trigger. Labelled DB-phase dependency added to docs/DB_REQUIREMENTS.md §2.1. |
+| **Feature flags (rule 7)** | **Documented** — one flag table (README.md, mirrored in `.env.example`) listing `VITE_FEATURE_PAYMENTS`, `VITE_FEATURE_ROOM_RPC`, `VITE_FEATURE_WALLET_TRANSACTIONS`, `JOIN_USE_RPC`, `ENABLE_TOURNAMENT_CANCELLATION` with the DB object each one needs and its safe default. No new flag names were introduced. |
+
+Verification (actually run): `npm test` → **89/89 passed** (`tests/admin.test.js` 43, `tests/api.test.js` 35, `tests/apiClient.test.js` 8, `tests/features.test.js` 3; Supabase mocked, no network). `npm run build` → **vite build succeeded** (`✓ built in 3.72s`). Nothing in `supabase/proposed/` has been applied to any database.
+
+### Round 2b — wallet requests + tournament cancellation, all behind flags (2026-10-13)
+
+| Item | Status |
+|---|---|
+| **Wallet requests (no gateway)** | **Added behind two flags** — client `VITE_FEATURE_WALLET_REQUESTS`, server `ENABLE_WALLET_REQUESTS`. `api/wallet.js` (one route) verifies the token, validates type/amount (₹1–₹50,000) and inserts a `pending` row whose `user_id` comes from the token; the body cannot set a status, a balance or a review. Per-user rate limit of 5/hour (`WALLET_REQUESTS_PER_HOUR`) enforced with a **database** count, with the serverless reasoning documented (docs/DB_REQUIREMENTS.md §3.5). The user's list shows pending/approved/rejected. |
+| **Money movement** | **Only via the proposed RPCs** — `approve_wallet_request()` / `reject_wallet_request()` (`supabase/proposed/005_wallet_requests.sql`) update the request, the balance and the ledger row in one transaction, are idempotent, and are granted to `service_role` only. The route never writes a balance. If the RPC/table is missing the answer is an honest `503 requires database setup` — no fake success (rule 4). |
+| **Admin review** | `api/admin.js` gained `listWalletRequests` (pending queue + usernames, best effort) and `approveWalletRequest` / `rejectWalletRequest`; `AdminView` renders the queue with approve/reject + note. |
+| **Tournament cancellation** | `cancelTournament` action. No paid registrations → plain status change to `'cancelled'` (flag irrelevant). Paid registrations → only with `ENABLE_TOURNAMENT_CANCELLATION=true` **and** `cancel_tournament_with_refund()` (`supabase/proposed/006_cancel_tournament_refunds.sql`, atomic + idempotent + `service_role` only); otherwise `409` naming the exact reason and changing nothing. Refunds are never looped client-side. `AdminView` replaced hard delete with **Cancel** (confirm dialog + optional reason) and shows the server's message verbatim. |
+| **Admin audit log** | **Best effort, never silent** — `api/_lib/audit.js` writes to `admin_audit_log` (`supabase/proposed/007_admin_audit_log.sql`, RLS on with zero policies; the `cancelled` status also needed a constraint replacement, 006 §2). When the table is missing the action still succeeds, the server logs a warning and the response says `auditLogged: false`. |
+| **Support contact** | Read from `VITE_SUPPORT_WHATSAPP` / `VITE_SUPPORT_UPI` (`src/config/support.js`). Documented as **public** values: the UPI ID is display-only and is never used to verify a payment (rule 4). |
+| **Transaction history** | Sign derived from the transaction `type` as an interim (`src/lib/transactions.js`, unit-tested) with the proper signed-amount convention documented for the DB phase (docs/DB_REQUIREMENTS.md §1.4); server-side pagination added (10 per page). |
+| **Deletion** | `api/deleteTournament.js` is unchanged; the admin UI no longer calls it. |
+
+Verification (actually run): `npm test` → **172/172 passed** (`tests/admin.test.js` 72, `tests/api.test.js` 35, `tests/wallet.test.js` 28, `tests/transactions.test.js` 21, `tests/apiClient.test.js` 12, `tests/features.test.js` 4; Supabase mocked, no network). `npm run build` → **vite build succeeded**. Still nothing in `supabase/proposed/` has been applied anywhere.
+
 ---
 
 ## P0 — Critical
@@ -108,6 +136,8 @@ Concrete failure modes:
 
 **Fix direction:** a single security-definer Postgres function `join_tournament(p_tournament_id, p_ff_uid, p_ign)` doing check → deduct → insert → count in one atomic unit with row locking; the API route (authenticated) calls it via RPC. Proposed in `supabase/proposed/004_functions_triggers.sql`.
 
+> **Update (2026-10-13, round 2):** implemented in `supabase/proposed/003_functions_triggers.sql` §2 with the signature `join_tournament(p_user_id uuid, p_tournament_id uuid, p_ff_uid text, p_ign text)` — see the round-2 table at the top of this document for why the identity is a parameter (service-role callers have no `auth.uid()`).
+
 ---
 
 ## P1 — High
@@ -191,3 +221,99 @@ Joins insert `amount: entryFee` **positive** with `type: 'join'` (`api/joinTourn
 1. **DB phase:** apply reviewed migrations from `supabase/proposed/` (RLS, constraints, atomic `join_tournament` RPC, room-credential protection, indexes).
 2. **API phase:** JWT-authenticate both routes, use server-derived fee + `auth.uid()`, call the RPC, stop leaking raw DB errors, env guards + honest 503 responses.
 3. **Client phase:** `src/config/features.js` flags, user-filtered wallet query, room credentials fetched only via the secure function, honest payment flow or clearly-labelled disabled state.
+
+---
+
+## Round 3 — measured numbers (2026-10-13, Part 4)
+
+Everything in this section was **run in this repository** and the output was
+observed. Nothing here is estimated, and the one item that could not be run is
+labelled as not run.
+
+### Build and quality gates (exact output)
+
+| Command | Result |
+|---|---|
+| `npm ci` | installs from the lockfile, no changes |
+| `npm run lint` (ESLint 9 flat config) | exit 0, **0 problems** |
+| `npm test` (Vitest) | **6 files, 172 tests passed**, ~1.7 s |
+| `npm run build` | success, 7 files in `dist/` |
+| `npm audit` | 13 vulnerabilities → 6 after `npm audit fix` (2 critical, 1 high, 3 moderate) — **all dev-only** (`vite`, `vitest`, `tinypool`, `esbuild`, `vite-node`, `@vitest/mocker`); each remaining fix is a semver-major (`--force`), not applied |
+| `npm audit --omit=dev` | **0 vulnerabilities** |
+
+### Bundle (measured with `find dist -type f -printf` + `gzip -9 -c`)
+
+| File | Raw | Gzipped |
+|---|---|---|
+| `index-*.js` (app) | 251,513 B | 65,384 B |
+| `vendor-motion-*.js` | 134,803 B | 44,197 B |
+| `vendor-react-*.js` | 133,935 B | 42,951 B |
+| `AdminView-*.js` (lazy) | 23,439 B | 6,207 B |
+| `index-*.css` | 22,352 B | 4,708 B |
+| `favicon.svg` + `index.html` | 2,370 B | 1,271 B |
+| **Total (7 files)** | **568,412 B** | **164,718 B** |
+
+### Secret exposure in the shipped bundle (both with and without env vars set)
+
+| Pattern | Occurrences in `dist/` |
+|---|---|
+| `SERVICE_ROLE`, `service_role`, `serviceRoleKey`, `supabaseAdmin` | **0** |
+| `VITE_` names readable in client JS | 5: the four feature flags + two support vars |
+| `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` *names* | 0 (Vite inlines their **values**; the anon key is public by design, the service-role key is absent) |
+
+A build made with dummy `VITE_*` values confirms the same negative result for
+every `service_role`-related pattern.
+
+### Accessibility — measured contrast (WCAG 2.1 AA)
+
+Contrast ratios computed from the declared tokens in `src/App.css`:
+
+| Pair | Ratio | Verdict |
+|---|---|---|
+| `--text-primary` on `--bg-elevated` | 15.99 | AA |
+| `--text-secondary` on `--bg-surface` | 8.54 | AA |
+| `--accent-text` on `--bg-surface` | 8.01 | AA |
+| `--danger-text` / `--success-text` on surfaces | 7.70 / 9.74 | AA |
+| **`--text-muted` (#737b8c) on `--bg-surface`** | **4.38** | **below 4.5 for normal text** (used at 11–13 px in several labels) |
+| **white (#fff) on `.btn-primary`'s orange gradient** | **3.33 → 2.86** | **below 4.5** (button label is 16 px/800 → not "large text") |
+
+Ready-to-apply fixes (one token / one declaration each, **not applied — owner
+decision, they change the brand look**):
+
+- `--text-muted: #737b8c` → `#828a9c` gives 5.06 on the worst surface
+  (`--bg-elevated`) and 5.37 on `--bg-surface`.
+- `.btn-primary { color: #fff }` → `color: #1a0a00` gives 5.81 on `#ff4d00` and
+  6.76 on `#ff6b00`.
+
+Lint-level a11y (`eslint-plugin-jsx-a11y`) is clean (0 problems) and cannot see
+either of the above — contrast is not a static-analysis rule here.
+
+### Other a11y / layout facts (static review, not browser-verified)
+
+- All three `<img>` elements carry `alt=""` and are decorative (card media,
+  avatars with adjacent text) — correct, and `loading="lazy"`/`decoding="async"`
+  are set.
+- Global `:focus-visible { outline: 2px solid var(--accent) }` exists; forms have
+  associated labels; the login fields gained explicit `aria-label`s in Part 4.
+- `@media (prefers-reduced-motion: reduce)` neutralises animation and transition
+  durations.
+- `index.html`'s viewport is
+  `width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no` —
+  **`user-scalable=no` blocks pinch-zoom**, which WCAG 1.4.4 treats as a failure.
+  Removing those two clauses is a one-line change and is the recommended fix.
+- Breakpoints exist at 500–1023 / 768 / 1024 / 1280 px; global guards
+  `overflow-x: hidden`, `img { max-width: 100% }`, `* { box-sizing: border-box }`.
+- Bottom-nav tap target: 22 px icon + 4 px gap + ~13 px text line (11 px font,
+  browser-default line-height) + 8 px padding ≈ **47 px** — above the 44 px
+  guideline, but computed from declared values, **not measured in a browser**.
+
+### Not run
+
+- **Lighthouse (performance and accessibility):** not runnable in this
+  environment — no Chrome/Chromium binary is installed and Puppeteer's browser
+  download is blocked. Run it against a deployed URL:
+  `npx lighthouse <url> --only-categories=performance,accessibility --view`.
+  No Lighthouse score is claimed anywhere in this repository.
+- **Real-device / real-viewport layout check (360 / 768 / desktop):** the review
+  above is static (CSS + markup). It is **not** a substitute for opening the app
+  in a browser — see SMOKE_TEST.md §8.1–8.3.

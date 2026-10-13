@@ -55,14 +55,34 @@ create trigger protect_profiles_columns_trg
 -- ---------------------------------------------------------------------------
 -- 2. join_tournament — the whole join in ONE atomic unit
 -- [recommended, closes AUDIT P0-1 + P0-6]
--- Called by an authenticated API route; the caller identity comes from the
--- JWT (auth.uid()), never from a request body. The entry fee comes from
--- tournaments.entry_fee, never from the client.
--- Response shape mirrors the current API for backward compatibility:
---   success: {"success": true}
---   failure: {"error": "..."}  /  {"error": "Already joined", "code": "23505"}
+--
+-- SIGNATURE / CALLER CONTRACT (changed 2026-10-13 — RPC integration bug fix):
+--   join_tournament(p_user_id uuid, p_tournament_id uuid, p_ff_uid text, p_ign text)
+--
+--   This function is executed by the SERVER-ROLE client only
+--   (api/joinTournament.js, path JOIN_USE_RPC=true). A service-role session
+--   has no JWT, so auth.uid() is NULL inside it — the previous version of
+--   this file identified the user with auth.uid(), which meant the RPC path
+--   could never work (and the EXECUTE grant to `authenticated` implied the
+--   browser could call it). Both are fixed:
+--     * the caller identity is the explicit parameter p_user_id, and the API
+--       route passes the id of the user it VERIFIED from the Authorization
+--       Bearer token (requireUser → supabase.auth.getUser(token)). It is
+--       never read from the request body;
+--     * EXECUTE is granted to service_role ONLY — public/anon/authenticated
+--       are revoked, so the browser cannot call this function at all.
+--
+--   The entry fee comes from tournaments.entry_fee, never from the client.
+--   Response shape mirrors the API for backward compatibility:
+--     success: {"success": true}
+--     failure: {"error": "..."}  /  {"error": "Already joined", "code": "23505"}
 -- ---------------------------------------------------------------------------
+-- Legacy signature from the earlier draft of this file (auth.uid()-based,
+-- granted to `authenticated`): drop it so no stale overload stays callable.
+drop function if exists public.join_tournament(uuid, text, text);
+
 create or replace function public.join_tournament(
+  p_user_id       uuid,
   p_tournament_id uuid,
   p_ff_uid        text,
   p_ign           text
@@ -73,12 +93,15 @@ security definer
 set search_path = public
 as $$
 declare
-  v_uid            uuid := auth.uid();
+  v_uid            uuid := p_user_id;
   v_fee            numeric(12,2);
   v_balance        numeric(12,2);
+  v_status         text;
   v_max_players    int;
   v_current        int;
 begin
+  -- Identity is the server-verified parameter. auth.uid() is deliberately NOT
+  -- used here: under the service role it is NULL (see header).
   if v_uid is null then
     return json_build_object('error', 'Not authenticated');
   end if;
@@ -89,16 +112,26 @@ begin
     return json_build_object('error', 'Missing data');
   end if;
 
-  -- Lock the tournament row: capacity check + fee derivation share one lock,
-  -- removing the TOCTOU race (AUDIT P0-6).
-  select entry_fee, max_players, current_players
-    into v_fee, v_max_players, v_current
+  -- Lock the tournament row: status + capacity check + fee derivation share
+  -- one lock, removing the TOCTOU race (AUDIT P0-6).
+  select entry_fee, status, max_players, current_players
+    into v_fee, v_status, v_max_players, v_current
   from public.tournaments
   where id = p_tournament_id
   for update;
 
   if not found then
     return json_build_object('error', 'Tournament not found');
+  end if;
+
+  -- Closed matches can never be joined: a cancelled match is void and a
+  -- completed one is over. (registration / upcoming / live stay joinable —
+  -- same product behavior as the legacy API path.)
+  if v_status = 'cancelled' then
+    return json_build_object('error', 'This match has been cancelled');
+  end if;
+  if v_status = 'completed' then
+    return json_build_object('error', 'This match has already ended');
   end if;
 
   if v_current >= v_max_players then
@@ -147,20 +180,42 @@ begin
      set current_players = current_players + 1
    where id = p_tournament_id;
 
-  -- Ledger entry, checked (the current API ignores this failure — AUDIT P0-6)
+  -- Ledger entry — CHECKED, not fire-and-forget (AUDIT P0-6): if this insert
+  -- fails or writes no row, the exception propagates out of the function and
+  -- the whole transaction (balance deduction + registration + count) rolls
+  -- back, so money can never move without a ledger row. Deliberately NOT
+  -- wrapped in an exception block that would swallow the failure.
   insert into public.transactions (user_id, type, amount, status)
   values (v_uid, 'join', v_fee, 'completed');
+
+  if not found then
+    raise exception 'join_tournament: ledger insert affected no rows'
+      using errcode = 'P0001';
+  end if;
 
   return json_build_object('success', true);
 end;
 $$;
 
-revoke all on function public.join_tournament(uuid, text, text) from public, anon;
-grant execute on function public.join_tournament(uuid, text, text) to authenticated;
+-- Server-role only. The API route holds SUPABASE_SERVICE_ROLE_KEY; the
+-- browser has no path to this function (no anon/authenticated grant).
+revoke all on function public.join_tournament(uuid, uuid, text, text) from public, anon, authenticated;
+grant execute on function public.join_tournament(uuid, uuid, text, text) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- 3. get_room_details — room credentials only for registered participants
 -- [recommended, closes AUDIT P0-3 together with 004 and a client change]
+--
+-- CALLER CONTRACT — DIFFERENT FROM join_tournament ABOVE, ON PURPOSE:
+--   This function IS called from the browser (src/App.jsx TournamentDetailView,
+--   flag VITE_FEATURE_ROOM_RPC) with the signed-in user's Supabase session, so
+--   auth.uid() IS populated (the request carries the user JWT). auth.uid()
+--   stays here and EXECUTE is granted to `authenticated` — the function must
+--   identify the caller itself, because the client only sends
+--   p_tournament_id and never a user id.
+--   join_tournament(), by contrast, is server-role only and therefore takes an
+--   explicit p_user_id. Never copy the auth.uid() pattern into join_tournament
+--   and never grant join_tournament to `authenticated`.
 -- ---------------------------------------------------------------------------
 create or replace function public.get_room_details(p_tournament_id uuid)
 returns table (room_id text, room_password text)

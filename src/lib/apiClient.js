@@ -63,6 +63,46 @@ export const api = {
   joinTournament: ({ tournamentId, ff_uid, ign }) =>
     request('/api/joinTournament', { body: { tournamentId, ff_uid, ign } }),
 
+  // Still available for the untouched api/deleteTournament.js route, but the
+  // admin UI no longer deletes tournaments — it cancels them (see below).
   deleteTournament: ({ tournamentId }) =>
-    request('/api/deleteTournament', { body: { tournamentId } })
+    request('/api/deleteTournament', { body: { tournamentId } }),
+
+  // --- admin (single server route: api/admin.js) ---------------------------
+  // The browser no longer writes tournaments or reads registrations with the
+  // anon key: every admin action carries the session token and the server
+  // re-reads the caller's role from the database (docs/AUDIT.md P1-2). The
+  // UI's isAdmin flag is cosmetic only.
+  adminCreateTournament: (tournament) =>
+    request('/api/admin', { body: { action: 'createTournament', tournament } }),
+
+  adminUpdateTournament: (tournament) =>
+    request('/api/admin', { body: { action: 'updateTournament', tournament } }),
+
+  adminListRegistrations: () =>
+    request('/api/admin', { body: { action: 'listRegistrations' } }),
+
+  // Cancel (not delete): the server decides whether the tournament can simply
+  // be closed or needs the atomic refund RPC, and answers 409/503 with the
+  // exact reason when it cannot. The UI shows that message verbatim.
+  adminCancelTournament: ({ tournamentId, reason }) =>
+    request('/api/admin', { body: { action: 'cancelTournament', tournamentId, reason } }),
+
+  // Wallet request review (server checks ENABLE_WALLET_REQUESTS first).
+  adminListWalletRequests: () =>
+    request('/api/admin', { body: { action: 'listWalletRequests' } }),
+
+  adminApproveWalletRequest: ({ requestId, note }) =>
+    request('/api/admin', { body: { action: 'approveWalletRequest', requestId, note } }),
+
+  adminRejectWalletRequest: ({ requestId, note }) =>
+    request('/api/admin', { body: { action: 'rejectWalletRequest', requestId, note } }),
+
+  // --- wallet requests (user side, api/wallet.js) --------------------------
+  // A request is never a balance: it is a pending row an admin must approve.
+  createWalletRequest: ({ type, amount, reference, note }) =>
+    request('/api/wallet', { body: { action: 'createWalletRequest', type, amount, reference, note } }),
+
+  listWalletRequests: ({ perPage } = {}) =>
+    request('/api/wallet', { body: { action: 'listWalletRequests', perPage } })
 };

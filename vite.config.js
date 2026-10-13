@@ -19,6 +19,10 @@ export default defineConfig({
     host: true,
     port: 5173,
     strictPort: true,
-    allowedHosts: 'all'
+    // Vite 5.4 refuses requests whose Host header is not in the allow-list
+    // (a DNS-rebinding guard). Mirrors/proxies reach the dev server under a
+    // generated host, so allow any host — this is a DEV-ONLY setting; the
+    // production build is unaffected.
+    allowedHosts: true
   }
 })

@@ -35,7 +35,7 @@ export function createMockClient({ steps = [], getUser } = {}) {
           }
           if (prop === 'single') return () => build({ ...ctx, single: true });
           if (prop === 'maybeSingle') return () => build({ ...ctx, maybeSingle: true });
-          if (['select', 'eq', 'order', 'limit', 'range', 'not'].includes(prop)) {
+          if (['select', 'eq', 'neq', 'in', 'gte', 'gt', 'lte', 'lt', 'is', 'order', 'limit', 'range', 'not'].includes(prop)) {
             return (...args) => build({ ...ctx, chain: [...(ctx.chain || []), [prop, ...args]] });
           }
           if (prop === 'insert' || prop === 'update') {
@@ -52,8 +52,14 @@ export function createMockClient({ steps = [], getUser } = {}) {
   const client = {
     auth: { getUser: getUser },
     from: (table) => build({ kind: 'db', table, op: 'select', chain: [] }),
-    // supabase.rpc() resolves to { data, error } like every other call
-    rpc: async (fn, args) => ({ data: take({ kind: 'rpc', fn, args }), error: null })
+    // supabase.rpc() resolves to { data, error } like every other call.
+    // A step value wrapped with rpcFailure(...) makes the call resolve with
+    // that object as `error` (a missing function, a transport failure, ...).
+    rpc: async (fn, args) => {
+      const step = take({ kind: 'rpc', fn, args });
+      if (step && step.__rpcError) return { data: null, error: step.__rpcError };
+      return { data: step, error: null };
+    }
   };
 
   return { client, calls };
@@ -63,6 +69,12 @@ function describeCtx(ctx) {
   if (ctx.kind === 'rpc') return `rpc ${ctx.fn}`;
   const chain = (ctx.chain || []).map(([fn, ...args]) => `${fn}(${args.map(String).join(', ')})`).join('.');
   return `${ctx.table}.${ctx.op}${chain ? ' -> ' + chain : ''}${ctx.single ? ' single' : ''}${ctx.maybeSingle ? ' maybeSingle' : ''}`;
+}
+
+// Wrap a mock RPC step value so the call resolves as a failure:
+//   { match: (c) => c.kind === 'rpc', value: rpcFailure({ code: 'PGRST202', message: '...' }) }
+export function rpcFailure(error) {
+  return { __rpcError: error };
 }
 
 // Standard request/response doubles for Vercel-style handlers.

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import {
   Shield, Plus, Edit, Trash2, Search, ArrowLeft,
   Users, Calendar, Trophy, ChevronRight,
@@ -14,6 +14,13 @@ import {
 import supabase from './lib/supabaseClient';
 import { api, ApiError } from './lib/apiClient';
 import { features } from './config/features';
+import { formatINR, formatDateTime } from './lib/format';
+import Avatar from './components/Avatar';
+import StatusBadge from './components/StatusBadge';
+import EmptyState from './components/EmptyState';
+import ErrorRetry from './components/ErrorRetry';
+import TournamentCard from './components/TournamentCard';
+import { ListSkeleton } from './components/Skeletons';
 import Terms from './pages/Terms';
 import './App.css';
 
@@ -62,27 +69,6 @@ const modalContent = {
   animate: { opacity: 1, scale: 1, y: 0, transition: { type: 'spring', stiffness: 300, damping: 28 } },
   exit:    { opacity: 0, scale: 0.9, y: 20, transition: { duration: 0.2 } }
 };
-
-function TournamentSkeleton() {
-  return (
-    <motion.div
-      className="tournament-card"
-      animate={{ opacity: [0.4, 0.8, 0.4] }}
-      transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
-      style={{ pointerEvents: 'none' }}
-    >
-      <div className="skeleton-image" />
-      <div className="tournament-info" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        <div className="skeleton-line" style={{ height: 18, width: '70%' }} />
-        <div className="skeleton-line" style={{ height: 13, width: '50%' }} />
-        <div style={{ display: 'flex', gap: 8 }}>
-          <div className="skeleton-line" style={{ height: 13, width: '35%' }} />
-          <div className="skeleton-line" style={{ height: 13, width: '35%' }} />
-        </div>
-      </div>
-    </motion.div>
-  );
-}
 
 function LoginScreen({ onLogin }) {
   const [identifier, setIdentifier] = useState('');
@@ -341,6 +327,7 @@ export default function App() {
   const [selectedTournament, setSelectedTournament] = useState(null);
   const [tournaments, setTournaments] = useState([]);
   const [tournamentsLoading, setTournamentsLoading] = useState(true);
+  const [tournamentsError, setTournamentsError] = useState('');
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, sess) => {
@@ -372,13 +359,20 @@ export default function App() {
 
   const fetchTournaments = async () => {
     setTournamentsLoading(true);
+    setTournamentsError('');
     // With the room RPC flag on, room credentials are never fetched in list
     // queries (docs/AUDIT.md P0-3); joined players get them via
     // get_room_details() instead.
     const columns = features.roomDetailsRpc
       ? 'id, name, mode, prize, entry_fee, max_players, current_players, status, match_time, image_url, rules, created_at'
       : '*';
-    const { data } = await supabase.from('tournaments').select(columns).order('created_at', { ascending: false });
+    const { data, error } = await supabase.from('tournaments').select(columns).order('created_at', { ascending: false });
+    if (error) {
+      console.error('tournaments query failed:', error.message);
+      setTournamentsError('Could not load matches. Please try again.');
+      setTournamentsLoading(false);
+      return [];
+    }
     setTournaments(data || []);
     if (selectedTournament?.id) {
       const latest = (data || []).find(t => t.id === selectedTournament.id);
@@ -393,21 +387,25 @@ export default function App() {
   }, [session?.user?.id]);
 
   if (authLoading) return (
-    <div className="app-container">
-      <div className="mobile-frame" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-        <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}>
-          <Flame size={50} style={{ color: 'var(--primary)' }} />
-        </motion.div>
+    <MotionConfig reducedMotion="user">
+      <div className="app-shell">
+        <div className="app-frame app-frame--center">
+          <div role="status" aria-label="Loading ClashArena">
+            <Loader size={48} className="spin" style={{ color: 'var(--accent)' }} />
+          </div>
+        </div>
       </div>
-    </div>
+    </MotionConfig>
   );
 
   if (!session) return (
-    <div className="app-container">
-      <div className="mobile-frame">
-        <LoginScreen onLogin={sess => setSession(sess)} />
+    <MotionConfig reducedMotion="user">
+      <div className="app-shell">
+        <div className="app-frame">
+          <LoginScreen onLogin={sess => setSession(sess)} />
+        </div>
       </div>
-    </div>
+    </MotionConfig>
   );
 
   const isAdmin = userProfile?.role === 'admin';
@@ -415,27 +413,39 @@ export default function App() {
   const user = {
     name: userProfile?.username || fallbackName,
     level: userProfile?.level || 1,
-    avatar: `https://i.pravatar.cc/150?u=${session.user.id}`,
+    avatarUrl: userProfile?.avatar_url || '',
     ff_id: userProfile?.ff_id || '',
     nickname: userProfile?.nickname || ''
   };
 
   return (
-    <div className="app-container">
-      <div className="mobile-frame">
-        <Header balance={userProfile?.balance || 0} user={user} />
-        {profileError && (
-          <div style={{ margin: '10px 16px 0', padding: '10px 12px', borderRadius: 10, background: 'rgba(239,68,68,0.12)', border: '1px solid #ef4444', color: '#fca5a5', fontSize: 13 }}>
-            {profileError}
-          </div>
-        )}
-        <main className="main-content">
-          <AnimatePresence mode="wait">
-            {currentView === 'home' && (
-              <motion.div key="home" variants={pageVariants} initial="initial" animate="animate" exit="exit">
-                <HomeView tournaments={tournaments} loading={tournamentsLoading} onTournamentSelect={t => { setSelectedTournament(t); setCurrentView('tournament'); }} />
-              </motion.div>
-            )}
+    <MotionConfig reducedMotion="user">
+      <div className="app-shell">
+        <a className="skip-link" href="#main-content">Skip to main content</a>
+        <DesktopNav currentView={currentView} setView={setCurrentView} isAdmin={isAdmin} />
+        <div className="app-frame">
+          <Header balance={userProfile?.balance || 0} user={user} />
+          {profileError && (
+            <div
+              role="alert"
+              style={{ margin: '10px 16px 0', padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--danger-soft)', border: '1px solid var(--danger-border)', color: 'var(--danger-text)', fontSize: 'var(--text-base)' }}
+            >
+              {profileError}
+            </div>
+          )}
+          <main id="main-content" className="main-content">
+            <AnimatePresence mode="wait">
+              {currentView === 'home' && (
+                <motion.div key="home" variants={pageVariants} initial="initial" animate="animate" exit="exit">
+                  <HomeView
+                    tournaments={tournaments}
+                    loading={tournamentsLoading}
+                    error={tournamentsError}
+                    onRetry={fetchTournaments}
+                    onTournamentSelect={t => { setSelectedTournament(t); setCurrentView('tournament'); }}
+                  />
+                </motion.div>
+              )}
             {currentView === 'tournament' && (
               <motion.div key="tournament" variants={pageVariants} initial="initial" animate="animate" exit="exit">
                 <TournamentDetailView tournament={selectedTournament} userProfile={userProfile} setView={setCurrentView} onJoinSuccess={fetchTournaments} />
@@ -475,8 +485,9 @@ export default function App() {
           </AnimatePresence>
         </main>
         <BottomNav currentView={currentView} setView={setCurrentView} isAdmin={isAdmin} />
+        </div>
       </div>
-    </div>
+    </MotionConfig>
   );
 }
 
@@ -484,95 +495,75 @@ function Header({ balance, user }) {
   return (
     <header className="app-header">
       <div className="header-content">
-        <motion.div className="brand" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.4 }}>
-          <Flame size={24} color="#ff4d00" />
-          <h1 style={{ marginLeft: 8 }}>CLASH<span className="brand-highlight">ARENA</span></h1>
-        </motion.div>
+        <div className="brand">
+          <Flame size={24} color="var(--accent)" aria-hidden="true" />
+          <h1>CLASH<span className="brand-highlight">ARENA</span></h1>
+        </div>
         <div className="header-actions">
-          <motion.div
-            className="balance-pill"
-            animate={{ boxShadow: ['0 0 0px rgba(34,197,94,0)', '0 0 14px rgba(34,197,94,0.5)', '0 0 0px rgba(34,197,94,0)'] }}
-            transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
-          >
-            <Wallet size={16} /> ₹{balance}
-          </motion.div>
-          <motion.img src={user.avatar} alt="Avatar" className="header-avatar" whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} />
+          <span className="balance-pill" title="Wallet balance">
+            <Wallet size={16} aria-hidden="true" /> {formatINR(balance)}
+          </span>
+          <Avatar name={user.name} src={user.avatarUrl} size={36} className="header-avatar" />
         </div>
       </div>
     </header>
   );
 }
 
-function HomeView({ tournaments, loading, onTournamentSelect }) {
+function HomeView({ tournaments, loading, error, onRetry, onTournamentSelect }) {
+  // Real, derived numbers only (no invented marketing values).
+  const liveCount = tournaments.filter(t => t.status === 'live').length;
+  const openCount = tournaments.filter(t => t.status === 'registration').length;
+  const totalPrize = tournaments
+    .filter(t => ['registration', 'upcoming', 'live'].includes(t.status))
+    .reduce((sum, t) => sum + (Number(t.prize) || 0), 0);
+
   return (
     <div className="view home-view">
-      <div style={{ position: 'relative', marginBottom: 24 }}>
-        <motion.div
-          className="hero-glow"
-          animate={{ opacity: [0.4, 0.8, 0.4], scale: [1, 1.08, 1] }}
-          transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
-        />
-        <section className="hero-section">
-          <motion.span className="live-badge" animate={{ opacity: [1, 0.6, 1] }} transition={{ duration: 1.5, repeat: Infinity }}>
-            <span className="pulse" /> LIVE NOW
-          </motion.span>
-          <motion.h2 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15, duration: 0.5 }}>
-            Compete & Win<br /><span className="gradient-text">Real Cash</span>
-          </motion.h2>
-        </section>
-      </div>
+      <section className="hero-section" aria-label="Welcome">
+        {liveCount > 0 ? (
+          <span className="live-badge live-badge--live">
+            <span className="pulse" aria-hidden="true" /> Live now — {liveCount} match{liveCount > 1 ? 'es' : ''}
+          </span>
+        ) : openCount > 0 ? (
+          <span className="live-badge"><span className="pulse" aria-hidden="true" /> {openCount} match{openCount > 1 ? 'es' : ''} open for entry</span>
+        ) : (
+          <span className="live-badge"><span className="pulse" aria-hidden="true" /> New matches coming soon</span>
+        )}
+        <h2>Compete &amp; Win<br /><span className="gradient-text">Real Cash</span></h2>
+      </section>
 
-      <motion.section className="stats-row" variants={staggerContainer} initial="initial" animate="animate">
-        <motion.div className="stat-card" variants={staggerItem} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} style={{ cursor: 'default' }}>
-          <Trophy size={28} className="stat-icon" />
-          <div><span className="stat-value">₹5L+</span><span className="stat-label">Prize Pool</span></div>
-        </motion.div>
-        <motion.div className="stat-card" variants={staggerItem} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} style={{ cursor: 'default' }}>
-          <Users size={28} className="stat-icon" />
-          <div><span className="stat-value">{tournaments.length}+</span><span className="stat-label">Matches</span></div>
-        </motion.div>
+      <motion.section className="stats-row" variants={staggerContainer} initial="initial" animate="animate" aria-label="Platform stats">
+        <div className="stat-card">
+          <Trophy size={26} className="stat-icon" aria-hidden="true" />
+          <div><span className="stat-value">{formatINR(totalPrize)}</span><span className="stat-label">Prize Pool</span></div>
+        </div>
+        <div className="stat-card">
+          <Users size={26} className="stat-icon" aria-hidden="true" />
+          <div><span className="stat-value">{tournaments.length}</span><span className="stat-label">Matches</span></div>
+        </div>
       </motion.section>
 
-      <section className="section">
-        <div className="section-header"><h3>Live Matches</h3></div>
+      <section className="section" aria-label="All matches">
+        <div className="section-header"><h3>All Matches</h3></div>
         {loading ? (
-          <motion.div variants={staggerContainer} initial="initial" animate="animate">
-            {[1, 2, 3].map(i => <motion.div key={i} variants={staggerItem}><TournamentSkeleton /></motion.div>)}
-          </motion.div>
+          <ListSkeleton count={3} />
+        ) : error ? (
+          <ErrorRetry message={error} onRetry={onRetry} />
         ) : tournaments.length === 0 ? (
-          <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ textAlign: 'center', color: '#666', padding: 40 }}>
-            No matches available.
-          </motion.p>
+          <EmptyState
+            icon={Trophy}
+            title="No matches yet"
+            hint="New tournaments are announced here. Check back soon."
+          />
         ) : (
-          <motion.div variants={staggerContainer} initial="initial" animate="animate">
+          <motion.ul className="card-grid" variants={staggerContainer} initial="initial" animate="animate">
             {tournaments.map(t => (
-              <motion.div
-                key={t.id}
-                className="tournament-card"
-                variants={staggerItem}
-                whileHover={{ scale: 1.03, y: -4, boxShadow: '0 15px 30px rgba(255,77,0,0.18)', borderColor: 'rgba(255,77,0,0.5)', transition: { duration: 0.25 } }}
-                whileTap={{ scale: 0.97, transition: { duration: 0.25 } }}
-                onClick={() => onTournamentSelect(t)}
-              >
-                <div className="tournament-image" style={{ backgroundImage: `url(${t.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800'})` }}>
-                  <div className="tournament-overlay">
-                    <span className={`status-badge ${t.status}`}>{t.status}</span>
-                  </div>
-                </div>
-                <div className="tournament-info">
-                  <div className="tournament-header"><h4>{t.name}</h4><span className="prize-tag">₹{t.prize}</span></div>
-                  <div className="tournament-meta">
-                    <span className="meta-item"><Users size={16} /> {t.current_players || 0}/{t.max_players}</span>
-                    <span className="meta-item"><Clock size={16} /> {formatMatchDateTime(t.match_time)}</span>
-                  </div>
-                  <div className="tournament-footer">
-                    <span className="mode-badge">{t.mode}</span>
-                    <span className="entry-fee">₹{t.entry_fee}</span>
-                  </div>
-                </div>
-              </motion.div>
+              <motion.li key={t.id} variants={staggerItem}>
+                <TournamentCard tournament={t} onSelect={onTournamentSelect} />
+              </motion.li>
             ))}
-          </motion.div>
+          </motion.ul>
         )}
       </section>
     </div>
@@ -1450,28 +1441,59 @@ const handleUpdate = async (form) => {
   );
 }
 
-function BottomNav({ currentView, setView, isAdmin }) {
-  const tabs = [
+function navItems(isAdmin) {
+  return [
     { id: 'home', icon: Home, label: 'Home' },
     ...(isAdmin ? [{ id: 'admin', icon: Shield, label: 'Admin' }] : []),
     { id: 'wallet', icon: Wallet, label: 'Wallet' },
     { id: 'profile', icon: User, label: 'Profile' }
   ];
+}
 
+function BottomNav({ currentView, setView, isAdmin }) {
   return (
-    <nav className="bottom-nav">
-      {tabs.map(t => (
-        <motion.button key={t.id} className={`nav-item ${currentView === t.id ? 'active' : ''}`} onClick={() => setView(t.id)} whileTap={{ scale: 0.85 }} animate={currentView === t.id ? { y: -4 } : { y: 0 }} transition={{ duration: 0.25 }}>
-          <motion.div animate={currentView === t.id ? { filter: 'drop-shadow(0 0 8px rgba(255,77,0,0.7))' } : { filter: 'none' }} transition={{ duration: 0.3 }}>
-            <t.icon size={22} />
-          </motion.div>
+    <nav className="bottom-nav" aria-label="Primary">
+      {navItems(isAdmin).map(t => (
+        <button
+          key={t.id}
+          type="button"
+          className={`nav-item ${currentView === t.id ? 'active' : ''}`}
+          onClick={() => setView(t.id)}
+          aria-current={currentView === t.id ? 'page' : undefined}
+        >
+          <t.icon size={22} aria-hidden="true" />
           <span>{t.label}</span>
-          {currentView === t.id && (
-            <motion.div className="nav-active-dot" layoutId="nav-indicator" initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 400, damping: 28 }} />
-          )}
-        </motion.button>
+          {currentView === t.id && <span className="nav-active-dot" aria-hidden="true" />}
+        </button>
       ))}
     </nav>
+  );
+}
+
+function DesktopNav({ currentView, setView, isAdmin }) {
+  return (
+    <aside className="desktop-nav" aria-label="Primary">
+      <div className="brand">
+        <Flame size={26} color="var(--accent)" aria-hidden="true" />
+        <h1>CLASH<span className="brand-highlight">ARENA</span></h1>
+      </div>
+      <ul className="dnav-list">
+        {navItems(isAdmin).map(t => (
+          <li key={t.id}>
+            <button
+              type="button"
+              className={`dnav-item ${currentView === t.id ? 'active' : ''}`}
+              onClick={() => setView(t.id)}
+              aria-current={currentView === t.id ? 'page' : undefined}
+            >
+              <t.icon size={20} aria-hidden="true" />
+              <span>{t.label}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="dnav-hint">Free Fire tournaments.<br />Play smart. Win real.</p>
+    </aside>
   );
 }
 function MyMatchesView({ userId, setView }) {

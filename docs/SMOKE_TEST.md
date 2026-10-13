@@ -137,7 +137,7 @@ fake success.
 |---|---|---|---|
 | 8.1 | Open the app at 360 px, 768 px and desktop widths (real browser/devtools) | No horizontal scroll, no clipped controls, no overlapping text | ⬜ |
 | 8.2 | Tab through login, join, wallet and admin forms | Every control is reachable and announced (labels present); focus visible | ⬜ |
-| 8.3 | Zoom the page to 200 % | Content still usable — **note:** the viewport meta currently sets `maximum-scale=1.0, user-scalable=no`, which blocks pinch-zoom on mobile. Record whether the owner accepts this | ⬜ |
+| 8.3 | Zoom the page to 200 % **and** pinch-zoom on a real phone | Content stays usable and pinch-zoom now works — the viewport meta was changed to `width=device-width, initial-scale=1.0` on 2026-10-13 (`maximum-scale`/`user-scalable` removed). Verify on a real device, since this can only be confirmed in a browser | ⬜ |
 | 8.4 | Run Lighthouse on the deployed staging URL (`npx lighthouse <url> --only-categories=performance,accessibility --view`) | Record the real scores. Not run in CI; not run in the coding sandbox (no browser binary) | ⬜ |
 | 8.5 | Log in as A on two devices/browsers; approve a wallet request from B while A is on the wallet screen | No stale/false balance; the UI refreshes to the truth on reload | ⬜ |
 | 8.6 | Search the deployed bundle for secrets: `grep -rl "SERVICE_ROLE\|service_role" dist/` | No matches (same check as [DEPLOYMENT.md](DEPLOYMENT.md) §5) | ⬜ |

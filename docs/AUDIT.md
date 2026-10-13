@@ -274,16 +274,30 @@ Contrast ratios computed from the declared tokens in `src/App.css`:
 | `--text-secondary` on `--bg-surface` | 8.54 | AA |
 | `--accent-text` on `--bg-surface` | 8.01 | AA |
 | `--danger-text` / `--success-text` on surfaces | 7.70 / 9.74 | AA |
-| **`--text-muted` (#737b8c) on `--bg-surface`** | **4.38** | **below 4.5 for normal text** (used at 11–13 px in several labels) |
-| **white (#fff) on `.btn-primary`'s orange gradient** | **3.33 → 2.86** | **below 4.5** (button label is 16 px/800 → not "large text") |
+| `--text-muted` (#737b8c → **#828a9c**) on `--bg-surface` | 4.38 → **5.37** | **FIXED 2026-10-13** (was below 4.5; used at 11–13 px in several labels) |
+| white (#fff) → **(#1a0a00)** on `.btn-primary`'s orange gradient | 3.33 → 2.86 · now **5.81 → 6.76** | **FIXED 2026-10-13** (button label is 16 px/800 → not "large text") |
+| `--text-muted` (#828a9c) on `.badge--cancelled`'s composited bg (`rgba(255,255,255,0.05)` over `--bg-elevated` ≈ #242431) | 3.60 → **4.42** | **still below 4.5** — residual, not fixed (see below) |
+| white (#fff) on `--danger` (#ef4444) — `.badge--live`, `.status-badge.live`, `.live-badge--live` | **3.76** | **below 4.5** — new finding, not in the approved change set |
+| white (#fff) on `--accent` (#ff4d00) — `.skip-link` | **3.33** | **below 4.5** — new finding, keyboard-only element |
+| white (#fff) on `--accent` (#ff4d00) — `::selection` | **3.33** | below 4.5; browser selection styling, lowest priority |
 
-Ready-to-apply fixes (one token / one declaration each, **not applied — owner
-decision, they change the brand look**):
+**Applied (approved 2026-10-13):**
 
-- `--text-muted: #737b8c` → `#828a9c` gives 5.06 on the worst surface
-  (`--bg-elevated`) and 5.37 on `--bg-surface`.
-- `.btn-primary { color: #fff }` → `color: #1a0a00` gives 5.81 on `#ff4d00` and
-  6.76 on `#ff6b00`.
+- `--text-muted: #737b8c` → `#828a9c` — measured 5.06 worst case
+  (`--bg-elevated`), 5.37 on `--bg-surface`, 5.58 on `--bg-inset` (input
+  placeholders/icons), 5.69 on `--bg-frame` (empty states, bottom nav).
+- `.btn-primary { color: #fff }` → `#1a0a00` — measured 5.81 on the `#ff4d00`
+  gradient stop and 6.76 on `#ff6b00` (worst stop governs).
+
+**Residual (needs a decision, NOT changed):**
+
+- `.badge--cancelled` sits on `rgba(255,255,255,0.05)` over a card, so the same
+  `--text-muted` token only reaches **4.42** there (lightest case: over
+  `--bg-elevated` ≈ #242431). Two one-line options: darken that badge's own
+  background (e.g. `rgba(0,0,0,0.35)`) or give it a slightly lighter text colour.
+- The `--danger` "live" badges (white on #ef4444, **3.76**), `.skip-link`
+  (3.33) and `::selection` (3.33) were found while measuring and are outside the
+  approved change set — reported, not modified.
 
 Lint-level a11y (`eslint-plugin-jsx-a11y`) is clean (0 problems) and cannot see
 either of the above — contrast is not a static-analysis rule here.
@@ -297,10 +311,11 @@ either of the above — contrast is not a static-analysis rule here.
   associated labels; the login fields gained explicit `aria-label`s in Part 4.
 - `@media (prefers-reduced-motion: reduce)` neutralises animation and transition
   durations.
-- `index.html`'s viewport is
-  `width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no` —
-  **`user-scalable=no` blocks pinch-zoom**, which WCAG 1.4.4 treats as a failure.
-  Removing those two clauses is a one-line change and is the recommended fix.
+- `index.html`'s viewport was
+  `width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no`,
+  which **blocked pinch-zoom** (WCAG 1.4.4 failure). **FIXED 2026-10-13:** it is
+  now `width=device-width, initial-scale=1.0` — `maximum-scale` and
+  `user-scalable` removed, nothing else touched.
 - Breakpoints exist at 500–1023 / 768 / 1024 / 1280 px; global guards
   `overflow-x: hidden`, `img { max-width: 100% }`, `* { box-sizing: border-box }`.
 - Bottom-nav tap target: 22 px icon + 4 px gap + ~13 px text line (11 px font,

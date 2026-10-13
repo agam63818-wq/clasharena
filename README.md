@@ -173,12 +173,15 @@ Measured on this repository's real build output (`find dist -type f -printf`,
 `gzip -9 -c` per file), not estimated.
 
 Accessibility: `eslint-plugin-jsx-a11y` (rules listed in `eslint.config.js`) is
-clean — **0 errors, 0 warnings** — but lint cannot see contrast. Measured against
-the declared tokens, **two known WCAG AA failures exist** (details and one-line
-fixes in [docs/AUDIT.md](docs/AUDIT.md) → *Round 3*): white text on the primary
-button's orange gradient (3.33 → 2.86) and `--text-muted` on `--bg-surface`
-(4.38). `index.html` also sets `user-scalable=no`, which blocks pinch-zoom.
-These need an owner decision because the fixes change the visual design.
+clean — **0 errors, 0 warnings**. Contrast is measured, not linted, and three
+WCAG AA failures were found and **fixed on 2026-10-13** (details and exact ratios
+in [docs/AUDIT.md](docs/AUDIT.md) → *Round 3*): `--text-muted` 4.38 → 5.37 on
+`--bg-surface`, the primary button's white label 3.33/2.86 → 5.81/6.76 with a
+near-black label, and the zoom-blocking `user-scalable=no` removed from the
+viewport meta. One residual is known and **not** fixed: `.badge--cancelled`
+reaches only 4.42 because its own translucent background lightens the surface
+under the muted text; white-on-red "live" badges (3.76) and `.skip-link` (3.33)
+are also below 4.5 and await an owner decision.
 
 Lighthouse was **not** run here (no browser binary in the build environment, and
 the Chrome download is blocked); run it locally with:

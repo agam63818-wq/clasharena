@@ -29,7 +29,7 @@
   /* ---- color: text ---- */
   --text-primary: #f4f4f8;
   --text-secondary: #a8b0c0;
-  --text-muted: #737b8c;
+  --text-muted: #828a9c; /* contrast: 5.06:1 worst case (on --bg-elevated), 5.37:1 on --bg-surface — WCAG AA normal text (was #737b8c at 4.13 / 4.38) */
 
   /* ---- color: semantic ---- */
   --success: #22c55e;
@@ -352,7 +352,8 @@ img {
 
 .btn-primary {
   background: linear-gradient(135deg, var(--accent), #ff6b00);
-  color: #fff;
+  /* near-black label: 5.81:1 on #ff4d00 and 6.76:1 on #ff6b00 — WCAG AA (was #fff at 3.33 / 2.86) */
+  color: #1a0a00;
   box-shadow: var(--shadow-accent);
 }
 

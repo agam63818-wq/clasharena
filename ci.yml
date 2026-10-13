@@ -1,0 +1,50 @@
+name: CI
+
+# No secrets required: the app's Supabase client reads its env vars at build
+# time, but Vite happily builds without them (the values are only used at
+# runtime), and every test mocks the Supabase client.
+#
+# Runs on every push and pull request. Node version comes from .nvmrc so CI and
+# local development agree.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# If a new commit lands while an older run of the same ref is still going,
+# cancel the older one (avoids duplicate/stale runs on PR branches).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: install → lint → build → test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node (from .nvmrc)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies (clean, from the lockfile)
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test

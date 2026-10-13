@@ -21,6 +21,7 @@ import EmptyState from './components/EmptyState';
 import ErrorRetry from './components/ErrorRetry';
 import TournamentCard from './components/TournamentCard';
 import { ListSkeleton } from './components/Skeletons';
+import Modal from './components/Modal';
 import Terms from './pages/Terms';
 import './App.css';
 
@@ -575,6 +576,7 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [alreadyJoined, setAlreadyJoined] = useState(false);
   const [joinData, setJoinData] = useState({ ff_uid: '', ign: '' });
+  const [joinFieldErrors, setJoinFieldErrors] = useState({});
   const [joinMessage, setJoinMessage] = useState('');
   const [joinMessageType, setJoinMessageType] = useState('');
   const isMatchFull = (tournament?.current_players || 0) >= (tournament?.max_players || 0);
@@ -609,22 +611,40 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
     return () => { cancelled = true; };
   }, [features.roomDetailsRpc, alreadyJoined, tournament?.id]);
 
-  const handleJoin = async () => {
+  // Client-side mirror of the server's validation (api/_lib/validate.js) —
+  // the server remains authoritative; this only gives instant feedback.
+  const validateJoinForm = () => {
+    const errors = {};
+    if (!/^[0-9]{5,20}$/.test(joinData.ff_uid.trim())) {
+      errors.ff_uid = 'Free Fire UID must be 5-20 digits.';
+    }
+    const ign = joinData.ign.trim();
+    if (ign.length < 2 || ign.length > 32) {
+      errors.ign = 'In-game name must be 2-32 characters.';
+    } else if (!/^[A-Za-z0-9 _.\-']+$/.test(ign)) {
+      errors.ign = "Only letters, numbers, spaces and . - _ ' are allowed.";
+    }
+    setJoinFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleJoin = async (e) => {
+    e && e.preventDefault();
     if (joining) return;
     setJoinMessage('');
-    if (!joinData.ff_uid || !joinData.ign) { setJoinMessage('Please enter both FF UID and In-game Name.'); setJoinMessageType('error'); return; }
-    if (userProfile.balance < tournament.entry_fee) { setJoinMessage('Insufficient balance for this match.'); setJoinMessageType('error'); return; }
+    if (!validateJoinForm()) return;
+    if (userProfile.balance < tournament.entry_fee) { setJoinMessage('Insufficient balance for this match. Add money from your wallet.'); setJoinMessageType('error'); return; }
     setJoining(true);
     try {
       const { data: existing } = await supabase.from('match_registrations').select('id').eq('tournament_id', tournament.id).eq('user_id', userProfile.id).maybeSingle();
       if (existing) { setAlreadyJoined(true); setShowJoinModal(false); return; }
 
       const { data: latest } = await supabase.from('tournaments').select('current_players, max_players').eq('id', tournament.id).single();
-      if ((latest.current_players || 0) >= latest.max_players) { setJoinMessage('Match Full'); setJoinMessageType('error'); return; }
+      if ((latest.current_players || 0) >= latest.max_players) { setJoinMessage('Match is full.'); setJoinMessageType('error'); return; }
 
       // Identity (userId) and entry fee are derived server-side from the
       // verified session token and the tournaments table — never sent here.
-      await api.joinTournament({ tournamentId: tournament.id, ff_uid: joinData.ff_uid, ign: joinData.ign });
+      await api.joinTournament({ tournamentId: tournament.id, ff_uid: joinData.ff_uid.trim(), ign: joinData.ign.trim() });
       setAlreadyJoined(true);
       setShowJoinModal(false);
       setJoinMessage('Successfully joined this match.');
@@ -657,67 +677,111 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
 
   return (
     <div className="view detail-view">
-      <motion.button className="back-btn" onClick={() => setView('home')} whileTap={{ scale: 0.93 }} whileHover={{ scale: 1.05 }} initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }}>← Back</motion.button>
+      <button type="button" className="back-btn" onClick={() => setView('home')}>
+        <ArrowLeft size={16} aria-hidden="true" style={{ verticalAlign: -2 }} /> Back
+      </button>
 
-      <motion.div className="detail-hero" style={{ backgroundImage: `url(${tournament.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=800'})` }} initial={{ opacity: 0, scale: 1.05 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.45 }}>
+      <div className="detail-hero" style={{ backgroundImage: `url(${tournament.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=1200&q=70&auto=format&fit=crop'})` }}>
         <div className="detail-hero-overlay">
-          <span className={`status-badge ${tournament.status}`}>{tournament.status}</span>
-          <motion.h2 initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>{tournament.name}</motion.h2>
-          <motion.div className="detail-prize" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }}>Prize: ₹{tournament.prize}</motion.div>
+          <StatusBadge tournament={tournament} />
+          <h2>{tournament.name}</h2>
+          <p className="detail-prize">Prize: {formatINR(tournament.prize)}</p>
         </div>
-      </motion.div>
+      </div>
 
-      <motion.div className="detail-content" variants={staggerContainer} initial="initial" animate="animate">
-        {joinMessage && (
-          <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} style={{ marginBottom: 12, borderRadius: 10, padding: '10px 12px', fontSize: 13, border: joinMessageType === 'success' ? '1px solid #22c55e' : '1px solid #ef4444', background: joinMessageType === 'success' ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)', color: joinMessageType === 'success' ? '#86efac' : '#fca5a5' }}>
-            {joinMessage}
-          </motion.div>
-        )}
-        <motion.div className="info-grid" variants={staggerItem}>
-          <div className="info-item"><span className="label">Entry Fee</span><span className="value">₹{tournament.entry_fee}</span></div>
+      <div className="detail-content">
+        <div aria-live="polite">
+          {joinMessage && (
+            <div className={`feedback ${joinMessageType === 'success' ? 'feedback--success' : 'feedback--error'}`} role={joinMessageType === 'success' ? 'status' : 'alert'}>
+              {joinMessageType === 'success'
+                ? <CheckCircle2 size={16} aria-hidden="true" />
+                : <AlertCircle size={16} aria-hidden="true" />}
+              {joinMessage}
+            </div>
+          )}
+        </div>
+
+        <section className="info-grid" aria-label="Match details">
+          <div className="info-item"><span className="label">Entry Fee</span><span className="value">{formatINR(tournament.entry_fee)}</span></div>
           <div className="info-item"><span className="label">Mode</span><span className="value">{tournament.mode}</span></div>
           <div className="info-item"><span className="label">Players</span><span className="value">{tournament.current_players || 0}/{tournament.max_players}</span></div>
-          <div className="info-item"><span className="label">Time</span><span className="value">{formatMatchDateTime(tournament.match_time)}</span></div>
-        </motion.div>
+          <div className="info-item"><span className="label">Time</span><span className="value">{formatDateTime(tournament.match_time)}</span></div>
+        </section>
 
-        <motion.div variants={staggerItem} style={{ background: 'var(--bg-card)', padding: 20, borderRadius: 16, marginBottom: 20 }}>
-          <h4 style={{ color: 'var(--primary)', marginBottom: 10 }}>📜 Rules</h4>
-          <p style={{ whiteSpace: 'pre-line', fontSize: 14, color: '#ccc' }}>{tournament.rules || 'No rules specified.'}</p>
-        </motion.div>
+        <section aria-label="Rules" style={{ background: 'var(--bg-surface)', padding: 'var(--space-5)', borderRadius: 'var(--radius-lg)', marginBottom: 'var(--space-5)', border: '1px solid var(--border-subtle)' }}>
+          <h3 style={{ color: 'var(--accent-text)', marginBottom: 'var(--space-2)', fontSize: 'var(--text-md)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rules</h3>
+          <p style={{ whiteSpace: 'pre-line', fontSize: 'var(--text-md)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{tournament.rules || 'No rules specified.'}</p>
+        </section>
 
-        <motion.div variants={staggerItem}>
-          {!alreadyJoined ? (
-            <motion.button className="btn btn-primary" onClick={() => setShowJoinModal(true)} disabled={joining || alreadyJoined || isMatchFull} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
-              <Trophy size={20} /> {isMatchFull ? 'Match Full' : `Join Tournament (₹${tournament.entry_fee})`}
-            </motion.button>
-          ) : (
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid #22c55e', padding: 20, borderRadius: 16 }}>
-              <h3 style={{ color: '#22c55e', marginBottom: 15, textAlign: 'center' }}>✅ Registered!</h3>
-              <div className="info-grid" style={{ marginBottom: 15 }}>
-                <div className="info-item"><span className="label">Room ID</span><span className="value">{roomDisplay.id}</span></div>
-                <div className="info-item"><span className="label">Password</span><span className="value">{roomDisplay.password}</span></div>
-              </div>
-              <p style={{ textAlign: 'center', fontSize: 12, color: '#888' }}>Room details active 15 mins before match</p>
-            </motion.div>
-          )}
-        </motion.div>
-      </motion.div>
-
-      <AnimatePresence>
-        {showJoinModal && (
-          <motion.div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} variants={modalBackdrop} initial="initial" animate="animate" exit="exit" onClick={e => e.target === e.currentTarget && setShowJoinModal(false)}>
-            <motion.div style={{ background: 'var(--bg-card)', padding: 30, borderRadius: 24, width: '100%', maxWidth: 350, border: '1px solid rgba(255,255,255,0.1)' }} variants={modalContent} initial="initial" animate="animate" exit="exit">
-              <h3 style={{ marginBottom: 20, textAlign: 'center', fontSize: 20, fontWeight: 800 }}>Enter Game Details</h3>
-              <input className="form-input" placeholder="Free Fire UID" value={joinData.ff_uid} onChange={e => setJoinData({ ...joinData, ff_uid: e.target.value })} style={{ marginBottom: 15 }} />
-              <input className="form-input" placeholder="In-Game Name" value={joinData.ign} onChange={e => setJoinData({ ...joinData, ign: e.target.value })} style={{ marginBottom: 20 }} />
-              <motion.button className="btn btn-primary" onClick={handleJoin} disabled={joining} style={{ marginBottom: 10 }} whileTap={{ scale: 0.95 }}>
-                {joining ? <Loader className="spin" size={20} /> : 'Confirm Join'}
-              </motion.button>
-              <motion.button className="btn btn-outline" onClick={() => setShowJoinModal(false)} whileTap={{ scale: 0.95 }}>Cancel</motion.button>
-            </motion.div>
-          </motion.div>
+        {!alreadyJoined ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => { setJoinFieldErrors({}); setShowJoinModal(true); }}
+            disabled={joining || isMatchFull}
+          >
+            <Trophy size={20} aria-hidden="true" />
+            {isMatchFull ? 'Match Full' : `Join Tournament (${formatINR(tournament.entry_fee)})`}
+          </button>
+        ) : (
+          <div style={{ background: 'var(--success-soft)', border: '1px solid var(--success-border)', padding: 'var(--space-5)', borderRadius: 'var(--radius-lg)' }}>
+            <h3 style={{ color: 'var(--success-text)', marginBottom: 'var(--space-4)', textAlign: 'center' }}>Registered!</h3>
+            <div className="info-grid" style={{ marginBottom: 'var(--space-4)' }}>
+              <div className="info-item"><span className="label">Room ID</span><span className="value">{roomDisplay.id}</span></div>
+              <div className="info-item"><span className="label">Password</span><span className="value">{roomDisplay.password}</span></div>
+            </div>
+            <p style={{ textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>Room details are shared around match time.</p>
+          </div>
         )}
-      </AnimatePresence>
+      </div>
+
+      <Modal open={showJoinModal} onClose={() => setShowJoinModal(false)} title="Enter game details" labelledBy="join-modal-title">
+        <form onSubmit={handleJoin} noValidate>
+          <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-md)', marginBottom: 'var(--space-4)', textAlign: 'center' }}>
+            Entry fee {formatINR(tournament.entry_fee)} will be deducted from your wallet balance.
+          </p>
+          <div className="field">
+            <label className="field-label" htmlFor="join-ff-uid">Free Fire UID</label>
+            <input
+              id="join-ff-uid"
+              className="input"
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="e.g. 123456789"
+              value={joinData.ff_uid}
+              onChange={e => setJoinData({ ...joinData, ff_uid: e.target.value })}
+              aria-invalid={!!joinFieldErrors.ff_uid}
+              aria-describedby={joinFieldErrors.ff_uid ? 'join-ff-uid-error' : undefined}
+            />
+            {joinFieldErrors.ff_uid && (
+              <p className="field-error" id="join-ff-uid-error"><AlertCircle size={13} aria-hidden="true" /> {joinFieldErrors.ff_uid}</p>
+            )}
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="join-ign">In-game name</label>
+            <input
+              id="join-ign"
+              className="input"
+              autoComplete="off"
+              placeholder="e.g. ShadowSlayer"
+              value={joinData.ign}
+              onChange={e => setJoinData({ ...joinData, ign: e.target.value })}
+              aria-invalid={!!joinFieldErrors.ign}
+              aria-describedby={joinFieldErrors.ign ? 'join-ign-error' : undefined}
+            />
+            {joinFieldErrors.ign && (
+              <p className="field-error" id="join-ign-error"><AlertCircle size={13} aria-hidden="true" /> {joinFieldErrors.ign}</p>
+            )}
+          </div>
+          <div className="modal-actions">
+            <button type="submit" className="btn btn-primary" disabled={joining}>
+              {joining ? <Loader size={18} className="spin" aria-hidden="true" /> : <Trophy size={18} aria-hidden="true" />}
+              {joining ? 'Joining…' : 'Confirm Join'}
+            </button>
+            <button type="button" className="btn btn-outline" onClick={() => setShowJoinModal(false)}>Cancel</button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 }

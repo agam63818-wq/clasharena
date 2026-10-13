@@ -1563,13 +1563,16 @@ function DesktopNav({ currentView, setView, isAdmin }) {
 function MyMatchesView({ userId, setView }) {
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     fetchMatches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchMatches = async () => {
     setLoading(true);
+    setError('');
 
     const { data, error } = await supabase
       .from('match_registrations')
@@ -1589,7 +1592,8 @@ function MyMatchesView({ userId, setView }) {
       .eq('user_id', userId);
 
     if (error) {
-      console.error(error);
+      console.error('my matches query failed:', error.message);
+      setError('Could not load your matches. Please try again.');
       setLoading(false);
       return;
     }
@@ -1599,105 +1603,69 @@ function MyMatchesView({ userId, setView }) {
   };
 
   return (
-    <div className="view" style={{ padding: '20px 16px' }}>
-
-      {/* HEADER */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-        <button className="btn btn-outline" onClick={() => setView('profile')}>
-          ← Back
+    <div className="view">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-5)' }}>
+        <button type="button" className="btn btn-ghost btn--sm" onClick={() => setView('profile')}>
+          <ArrowLeft size={15} aria-hidden="true" /> Back
         </button>
-        <h2 style={{ fontWeight: '800' }}>My Matches</h2>
+        <h2 style={{ fontSize: 'var(--text-2xl)', fontWeight: 'var(--weight-extrabold)' }}>My Matches</h2>
       </div>
 
-      {/* LOADING */}
-      {loading && (
-        <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
-          Loading matches...
-        </div>
+      {loading ? (
+        <ListSkeleton count={2} />
+      ) : error ? (
+        <ErrorRetry message={error} onRetry={fetchMatches} />
+      ) : matches.length === 0 ? (
+        <EmptyState
+          icon={Gamepad2}
+          title="No matches joined yet"
+          hint="Join a tournament to see it here with room details and schedules."
+          action={
+            <button type="button" className="btn btn-primary btn--sm" onClick={() => setView('home')}>
+              <Trophy size={16} aria-hidden="true" /> Browse matches
+            </button>
+          }
+        />
+      ) : (
+        <motion.ul className="card-grid" variants={staggerContainer} initial="initial" animate="animate">
+          {matches.map(m => (
+            <MyMatchCard key={m.id} registration={m} />
+          ))}
+        </motion.ul>
       )}
-
-      {/* EMPTY */}
-      {!loading && matches.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '60px 20px' }}>
-          <Gamepad2 size={40} color="#444" />
-          <p style={{ marginTop: 10, color: '#888' }}>No matches joined yet</p>
-        </div>
-      )}
-
-      {/* MATCH LIST */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {matches.map(m => {
-          const t = m.tournaments;
-
-          return (
-            <motion.div
-              key={m.id}
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
-              style={{
-                borderRadius: '20px',
-                overflow: 'hidden',
-                background: '#111116',
-                border: '1px solid rgba(255,255,255,0.05)',
-                position: 'relative'
-              }}
-            >
-
-              {/* IMAGE */}
-              <div
-                style={{
-                  height: '120px',
-                  backgroundImage: `url(${t?.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e'})`,
-                  backgroundSize: 'cover',
-                  backgroundPosition: 'center'
-                }}
-              >
-                <div style={{
-                  background: 'rgba(0,0,0,0.6)',
-                  height: '100%',
-                  display: 'flex',
-                  alignItems: 'flex-end',
-                  padding: '10px'
-                }}>
-                  <span style={{
-                    background: t?.status === 'live' ? '#22c55e' :
-                                t?.status === 'upcoming' ? '#3b82f6' : '#f59e0b',
-                    padding: '4px 10px',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                    fontWeight: 'bold'
-                  }}>
-                    {t?.status || 'unknown'}
-                  </span>
-                </div>
-              </div>
-
-              {/* CONTENT */}
-              <div style={{ padding: '16px' }}>
-                <h3 style={{ marginBottom: '6px' }}>
-                  {t?.name || 'Unknown Match'}
-                </h3>
-
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: '13px',
-                  color: '#aaa',
-                  marginBottom: '10px'
-                }}>
-                  <span>Prize ₹{t?.prize || 0}</span>
-                  <span>Entry ₹{t?.entry_fee || 0}</span>
-                </div>
-
-                <div style={{ fontSize: '12px', color: '#888' }}>
-                  ⏰ {t?.match_time ? new Date(t.match_time).toLocaleString() : 'TBA'}
-                </div>
-              </div>
-
-            </motion.div>
-          );
-        })}
-      </div>
     </div>
+  );
+}
+
+function MyMatchCard({ registration }) {
+  const [imgError, setImgError] = useState(false);
+  const t = registration.tournaments;
+  const current = Number(t?.current_players) || 0;
+  const max = Number(t?.max_players) || 0;
+
+  return (
+    <li>
+      <article className="t-card" style={{ cursor: 'default' }}>
+        <span className="t-card-media">
+          {!imgError && t?.image_url && (
+            <img src={t.image_url} alt="" loading="lazy" decoding="async" onError={() => setImgError(true)} />
+          )}
+          <StatusBadge tournament={t} />
+        </span>
+        <span className="t-card-body">
+          <span className="t-card-title-row">
+            <span className="t-card-title">{t?.name || 'Unknown match'}</span>
+            <span className="prize-tag">{formatINR(t?.prize)}</span>
+          </span>
+          <span className="t-card-meta">
+            <span className="meta-item"><DollarSign size={14} aria-hidden="true" /> Entry {formatINR(t?.entry_fee)}</span>
+            <span className="meta-item"><Clock size={14} aria-hidden="true" /> {formatDateTime(t?.match_time)}</span>
+            {max > 0 && (
+              <span className="meta-item"><Users size={14} aria-hidden="true" /> {current}/{max} slots</span>
+            )}
+          </span>
+        </span>
+      </article>
+    </li>
   );
 }

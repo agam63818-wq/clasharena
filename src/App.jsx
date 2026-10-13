@@ -859,289 +859,261 @@ function WalletView({ balance, userId }) {
 }
 
 function ProfileView({ user, profileData, onProfileUpdate, onLogout, setView }) {
-const [editing, setEditing] = useState(false);
-const [saving, setSaving] = useState(false);
-const [error, setError] = useState('');
-const [success, setSuccess] = useState('');
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [form, setForm] = useState({
+    ff_id: '',
+    nickname: '',
+    avatar_url: ''
+  });
+
   useEffect(() => {
     if (success) {
       const timer = setTimeout(() => setSuccess(''), 3000);
       return () => clearTimeout(timer);
     }
   }, [success]);
-const [form, setForm] = useState({
-ff_id: '',
-nickname: '',
-avatar_url: ''
-});
 
-useEffect(() => {
-if (profileData) {
-setForm({
-ff_id: profileData.ff_id || '',
-nickname: profileData.nickname || '',
-avatar_url: profileData.avatar_url || ''
-});
-}
-}, [profileData]);
+  useEffect(() => {
+    if (profileData) {
+      setForm({
+        ff_id: profileData.ff_id || '',
+        nickname: profileData.nickname || '',
+        avatar_url: profileData.avatar_url || ''
+      });
+    }
+  }, [profileData]);
 
-const handleSave = async () => {
-setError('');
-setSuccess('');
+  const validateForm = () => {
+    const errors = {};
+    const nickname = form.nickname.trim();
+    if (!nickname) {
+      errors.nickname = 'Nickname cannot be empty.';
+    } else if (nickname.length < 3) {
+      errors.nickname = 'Nickname must be at least 3 characters.';
+    }
+    const avatar = form.avatar_url.trim();
+    if (avatar && !/^https?:\/\/.+/i.test(avatar)) {
+      errors.avatar_url = 'Avatar URL must start with http:// or https://.';
+    }
+    const ffId = form.ff_id.trim();
+    if (ffId && !/^[0-9]{5,20}$/.test(ffId)) {
+      errors.ff_id = 'Free Fire UID must be 5-20 digits.';
+    }
+    setFieldErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
-if (!form.nickname.trim()) {  
-  setError("Nickname cannot be empty");  
-  return;  
-}  
+  const handleSave = async (e) => {
+    e && e.preventDefault();
+    setError('');
+    setSuccess('');
+    if (!validateForm()) return;
 
-if (form.nickname.length < 3) {  
-  setError("Nickname must be at least 3 characters");  
-  return;  
-}  
+    setSaving(true);
 
-setSaving(true);  
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          ff_id: form.ff_id.trim(),
+          nickname: form.nickname.trim(),
+          avatar_url: form.avatar_url.trim()
+        })
+        .eq('id', profileData.id);
 
-try {  
-  const { error } = await supabase  
-    .from('profiles')  
-    .update({  
-      ff_id: form.ff_id.trim(),  
-      nickname: form.nickname.trim(),  
-      avatar_url: form.avatar_url.trim()  
-    })  
-    .eq('id', profileData.id);  
+      if (error) throw error;
 
-  if (error) throw error;  
+      await onProfileUpdate();
 
-  await onProfileUpdate();  
+      setEditing(false);
+      setSuccess('Profile updated successfully.');
 
-  setEditing(false);  
-  setSuccess("Profile updated successfully ✅");  
+    } catch (err) {
+      setError(err.message || 'Could not update your profile. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
-  setTimeout(() => setSuccess(''), 3000); // 3 sec me success msg hide ho jayega  
+  return (
+    <div className="view">
+      <div aria-live="polite">
+        {success && (
+          <div className="feedback feedback--success" role="status">
+            <CheckCircle2 size={16} aria-hidden="true" /> {success}
+          </div>
+        )}
+        {error && (
+          <div className="feedback feedback--error" role="alert">
+            <AlertCircle size={16} aria-hidden="true" /> {error}
+          </div>
+        )}
+      </div>
 
-} catch (err) {  
-  setError(err.message);  
-} finally {  
-  setSaving(false);  
-}
+      <section
+        aria-label="Profile"
+        style={{
+          textAlign: 'center',
+          marginBottom: 'var(--space-6)',
+          background: 'var(--bg-surface)',
+          padding: 'var(--space-6) var(--space-4)',
+          borderRadius: 'var(--radius-2xl)',
+          border: '1px solid var(--border-subtle)',
+          position: 'relative',
+          overflow: 'hidden'
+        }}
+      >
+        <div aria-hidden="true" style={{ position: 'absolute', top: -50, left: '50%', transform: 'translateX(-50%)', width: 150, height: 150, background: 'var(--accent-soft)', filter: 'blur(50px)', borderRadius: '50%' }} />
+        <div style={{ position: 'relative' }}>
+          <div style={{ display: 'inline-block', position: 'relative', marginBottom: 'var(--space-3)' }}>
+            <Avatar name={profileData?.username || user.name} src={profileData?.avatar_url} size={90} />
+            <span
+              aria-hidden="true"
+              style={{ position: 'absolute', bottom: 0, right: 0, background: 'var(--accent)', borderRadius: '50%', padding: 5, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Award size={14} color="#fff" />
+            </span>
+          </div>
+          <h2 style={{ fontSize: 'var(--text-2xl)', fontWeight: 'var(--weight-extrabold)', marginBottom: 'var(--space-2)' }}>
+            {profileData?.username || user.name}
+          </h2>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className="badge badge--open" style={{ background: 'var(--accent-soft)', borderColor: 'var(--accent-border)', color: 'var(--accent-text)' }}>
+              LVL {profileData?.level || 1}
+            </span>
+            {profileData?.role && (
+              <span className="badge badge--unknown">{'role' in profileData ? profileData.role : ''}</span>
+            )}
+          </div>
+        </div>
+      </section>
 
-};
+      <section aria-label="Stats" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)', marginBottom: 'var(--space-6)' }}>
+        <div className="info-item">
+          <DollarSign size={20} color="var(--success-text)" aria-hidden="true" />
+          <div><span className="label">Wallet Balance</span><span className="value">{formatINR(profileData?.balance)}</span></div>
+        </div>
+        <div className="info-item">
+          <Trophy size={20} color="var(--gold)" aria-hidden="true" />
+          <div><span className="label">Total Wins</span><span className="value">{profileData?.wins || 0}</span></div>
+        </div>
+      </section>
 
-return (
-<div className="view" style={{ padding: '20px 16px', background: '#050505', minHeight: '100vh' }}>
+      <section aria-label="Edit profile" style={{ background: 'var(--bg-surface)', padding: 'var(--space-4)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-subtle)', marginBottom: 'var(--space-6)' }}>
+        {editing ? (
+          <form onSubmit={handleSave} noValidate>
+            <h3 style={{ color: 'var(--text-primary)', fontSize: 'var(--text-lg)', fontWeight: 'var(--weight-bold)', marginBottom: 'var(--space-4)' }}>Update profile</h3>
 
-{/* ALERTS (Smooth Animation) */}  
-  <AnimatePresence>  
-    {success && (  
-      <motion.div   
-        initial={{ opacity: 0, y: -10 }}   
-        animate={{ opacity: 1, y: 0 }}   
-        exit={{ opacity: 0, y: -10 }}  
-        style={{ background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#4ade80', padding: '12px', borderRadius: '12px', fontSize: '14px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}  
-      >  
-        <CheckCircle2 size={18} /> {success}  
-      </motion.div>  
-    )}  
+            <div className="field">
+              <label className="field-label" htmlFor="profile-ff-id">Free Fire UID</label>
+              <input
+                id="profile-ff-id"
+                className="input"
+                inputMode="numeric"
+                placeholder="Required to join matches"
+                value={form.ff_id}
+                onChange={(e) => setForm({ ...form, ff_id: e.target.value })}
+                aria-invalid={!!fieldErrors.ff_id}
+                aria-describedby={fieldErrors.ff_id ? 'profile-ff-id-error' : undefined}
+              />
+              {fieldErrors.ff_id && <p className="field-error" id="profile-ff-id-error"><AlertCircle size={13} aria-hidden="true" /> {fieldErrors.ff_id}</p>}
+            </div>
 
-    {error && (  
-      <motion.div   
-        initial={{ opacity: 0, y: -10 }}   
-        animate={{ opacity: 1, y: 0 }}   
-        exit={{ opacity: 0, y: -10 }}  
-        style={{ background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171', padding: '12px', borderRadius: '12px', fontSize: '14px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}  
-      >  
-        <AlertCircle size={18} /> {error}  
-      </motion.div>  
-    )}  
-  </AnimatePresence>  
+            <div className="field">
+              <label className="field-label" htmlFor="profile-nickname">Game nickname</label>
+              <input
+                id="profile-nickname"
+                className="input"
+                placeholder="Shown to opponents"
+                value={form.nickname}
+                onChange={(e) => setForm({ ...form, nickname: e.target.value })}
+                aria-invalid={!!fieldErrors.nickname}
+                aria-describedby={fieldErrors.nickname ? 'profile-nickname-error' : undefined}
+              />
+              {fieldErrors.nickname && <p className="field-error" id="profile-nickname-error"><AlertCircle size={13} aria-hidden="true" /> {fieldErrors.nickname}</p>}
+            </div>
 
-  {/* PROFILE HEADER (Gaming Style) */}  
-  <div style={{ textAlign: 'center', marginBottom: '24px', background: 'rgba(255,255,255,0.03)', padding: '24px 16px', borderRadius: '24px', border: '1px solid rgba(255,255,255,0.05)', position: 'relative', overflow: 'hidden' }}>  
+            <div className="field">
+              <label className="field-label" htmlFor="profile-avatar">Avatar URL (optional)</label>
+              <input
+                id="profile-avatar"
+                className="input"
+                type="url"
+                placeholder="https://example.com/avatar.png"
+                value={form.avatar_url}
+                onChange={(e) => setForm({ ...form, avatar_url: e.target.value })}
+                aria-invalid={!!fieldErrors.avatar_url}
+                aria-describedby={fieldErrors.avatar_url ? 'profile-avatar-error' : undefined}
+              />
+              {fieldErrors.avatar_url && <p className="field-error" id="profile-avatar-error"><AlertCircle size={13} aria-hidden="true" /> {fieldErrors.avatar_url}</p>}
+            </div>
 
-    {/* Subtle Background Glow */}  
-    <div style={{ position: 'absolute', top: '-50px', left: '50%', transform: 'translateX(-50%)', width: '150px', height: '150px', background: 'rgba(255,77,0,0.2)', filter: 'blur(50px)', borderRadius: '50%', zIndex: 0 }} />  
+            <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
+              <button type="submit" className="btn btn-primary" disabled={saving} style={{ flex: 1 }}>
+                <Save size={16} aria-hidden="true" /> {saving ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline"
+                style={{ flex: 1 }}
+                onClick={() => {
+                  setEditing(false);
+                  setError('');
+                  setSuccess('');
+                  setFieldErrors({});
+                  setForm({
+                    ff_id: profileData?.ff_id || '',
+                    nickname: profileData?.nickname || '',
+                    avatar_url: profileData?.avatar_url || ''
+                  });
+                }}
+              >
+                <X size={16} aria-hidden="true" /> Cancel
+              </button>
+            </div>
+          </form>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-outline"
+            onClick={() => setEditing(true)}
+            style={{ width: '100%' }}
+          >
+            <Edit2 size={16} aria-hidden="true" /> Edit profile info
+          </button>
+        )}
+      </section>
 
-    <div style={{ position: 'relative', zIndex: 1 }}>  
-      <motion.div   
-        style={{ position: 'relative', display: 'inline-block', marginBottom: '12px' }}  
-        whileHover={{ scale: 1.05 }}  
-      >  
-        <img  
-          src={profileData?.avatar_url || `https://api.dicebear.com/7.x/avataaars/svg?seed=${profileData?.username || "Player"}`}  
-          className="profile-avatar-large"  
-          style={{ width: '90px', height: '90px', borderRadius: '50%', border: '3px solid #ff4d00', padding: '3px', background: '#111' }}  
-        />  
-        <div style={{ position: 'absolute', bottom: '0', right: '0', background: '#ff4d00', borderRadius: '50%', p: '4px', padding: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>  
-          <Award size={14} color="#fff" />  
-        </div>  
-      </motion.div>  
+      <h3 style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', fontWeight: 'var(--weight-semibold)', marginBottom: 'var(--space-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>App settings</h3>
 
-      <h2 style={{ fontSize: '22px', fontWeight: '800', color: '#fff', marginBottom: '6px' }}>  
-        {profileData?.username || "Player"}  
-      </h2>  
-
-      <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', alignItems: 'center' }}>  
-        <span className="status-badge upcoming" style={{ background: '#ff4d00', color: '#fff', fontWeight: 'bold' }}>  
-          LVL {profileData?.level || 1}  
-        </span>  
-        {profileData?.role && (  
-          <span style={{ fontSize: '11px', padding: '4px 10px', borderRadius: '20px', background: 'rgba(168,85,247,0.2)', color: '#c084fc', border: '1px solid rgba(168,85,247,0.3)', textTransform: 'uppercase', fontWeight: 'bold' }}>  
-            {profileData.role}  
-          </span>  
-        )}  
-      </div>  
-    </div>  
-  </div>  
-
-  {/* QUICK STATS (Balance & Details) */}  
-  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px' }}>  
-    <div style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'center' }}>  
-      <DollarSign size={20} color="#22c55e" style={{ marginBottom: '4px' }} />  
-      <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff' }}>₹{profileData?.balance || 0}</div>  
-      <div style={{ fontSize: '12px', color: '#888' }}>Wallet Balance</div>  
-    </div>  
-    <div style={{ background: 'rgba(255,255,255,0.03)', padding: '16px', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'center' }}>  
-      <Trophy size={20} color="#eab308" style={{ marginBottom: '4px' }} />  
-      <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff' }}>{profileData?.wins || 0}</div>  
-      <div style={{ fontSize: '12px', color: '#888' }}>Total Wins</div>  
-    </div>  
-  </div>  
-
-  {/* EDIT PROFILE SECTION */}  
-  <div style={{ background: 'rgba(255,255,255,0.02)', padding: '16px', borderRadius: '20px', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '24px' }}>  
-    <AnimatePresence mode="wait">  
-      {editing ? (  
-        <motion.div   
-          key="editing"  
-          initial={{ opacity: 0, y: 10 }}  
-          animate={{ opacity: 1, y: 0 }}  
-          exit={{ opacity: 0, y: -10 }}  
-          style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}  
-        >  
-          <h4 style={{ color: '#fff', fontSize: '16px', fontWeight: 'bold', marginBottom: '4px' }}>Update Profile</h4>  
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>  
-            <input  
-              className="form-input"  
-              placeholder="Free Fire UID (Required)"  
-              value={form.ff_id}  
-              onChange={(e) => setForm({ ...form, ff_id: e.target.value })}  
-              style={{ width: '100%', boxSizing: 'border-box' }}  
-            />  
-
-            <input  
-              className="form-input"  
-              placeholder="Game Nickname"  
-              value={form.nickname}  
-              onChange={(e) => setForm({ ...form, nickname: e.target.value })}  
-              style={{ width: '100%', boxSizing: 'border-box' }}  
-            />  
-
-            <input  
-              className="form-input"  
-              placeholder="Custom Avatar URL"  
-              value={form.avatar_url}  
-              onChange={(e) => setForm({ ...form, avatar_url: e.target.value })}  
-              style={{ width: '100%', boxSizing: 'border-box' }}  
-            />  
-          </div>  
-
-          <div style={{ display: 'flex', gap: '10px' }}>  
-            <button className="btn btn-primary" onClick={handleSave} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>  
-              <Save size={16} /> {saving ? "Saving..." : "Save"}  
-            </button>  
-
-            <button className="btn btn-outline" onClick={() => {
-                setEditing(false);
-                setError('');
-                setSuccess('');
-                setForm({
-                  ff_id: profileData?.ff_id || '',
-                  nickname: profileData?.nickname || '',
-                  avatar_url: profileData?.avatar_url || ''
-                });
-              }} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>  
-              <X size={16} /> Cancel  
-            </button>  
-          </div>  
-        </motion.div>  
-      ) : (  
-        <motion.div  
-          key="not-editing"  
-          initial={{ opacity: 0 }}  
-          animate={{ opacity: 1 }}  
-          exit={{ opacity: 0 }}  
-        >  
-          <button   
-            className="btn btn-outline"   
-            onClick={() => setEditing(true)}  
-            style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', background: 'rgba(255,255,255,0.03)' }}  
-          >  
-            <Edit2 size={16} /> Edit Profile Info  
-          </button>  
-        </motion.div>  
-      )}  
-    </AnimatePresence>  
-  </div>  
-
-  {/* ACTIONS MENU (Smooth styling) */}  
-  <h4 style={{ color: '#888', fontSize: '13px', fontWeight: '600', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>App Settings</h4>  
-
-  <div className="menu-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>  
-
-    <motion.div   
-      className="menu-item"   
-      onClick={() => setView('myMatches')}  
-      whileHover={{ x: 4, background: 'rgba(255,255,255,0.05)' }}  
-      whileTap={{ scale: 0.98 }}  
-      style={{ padding: '16px', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer' }}  
-    >  
-      <Gamepad2 size={20} color="#ff4d00" />   
-      <span style={{ color: '#fff', flex: 1, fontWeight: '500' }}>My Matches</span>  
-      <ChevronRight size={18} color="#666" />  
-    </motion.div>  
-
-    <motion.div   
-      className="menu-item"   
-      onClick={() => setView('wallet')}  
-      whileHover={{ x: 4, background: 'rgba(255,255,255,0.05)' }}  
-      whileTap={{ scale: 0.98 }}  
-      style={{ padding: '16px', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer' }}  
-    >  
-      <Wallet size={20} color="#22c55e" />   
-      <span style={{ color: '#fff', flex: 1, fontWeight: '500' }}>Wallet & Payments</span>  
-      <ChevronRight size={18} color="#666" />  
-    </motion.div>  
-
-    <motion.div   
-      className="menu-item"   
-      onClick={() => setView('terms')}  
-      whileHover={{ x: 4, background: 'rgba(255,255,255,0.05)' }}  
-      whileTap={{ scale: 0.98 }}  
-      style={{ padding: '16px', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer' }}  
-    >  
-      <FileText size={20} color="#3b82f6" />   
-      <span style={{ color: '#fff', flex: 1, fontWeight: '500' }}>Terms & Conditions</span>  
-      <ChevronRight size={18} color="#666" />  
-    </motion.div>  
-
-    <motion.div   
-      className="menu-item"   
-      onClick={onLogout}  
-      whileHover={{ x: 4, background: 'rgba(239,68,68,0.05)' }}  
-      whileTap={{ scale: 0.98 }}  
-      style={{ padding: '16px', borderRadius: '16px', display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer' }}  
-    >  
-      <LogOut size={20} color="#ef4444" />   
-      <span style={{ color: '#ef4444', flex: 1, fontWeight: '600' }}>Logout Account</span>  
-      <ChevronRight size={18} color="#ef4444" />  
-    </motion.div>  
-
-  </div>  
-</div>
-
-);
+      <nav className="menu-list" aria-label="App settings">
+        <button type="button" className="menu-item" onClick={() => setView('myMatches')}>
+          <Gamepad2 size={20} color="var(--accent-text)" aria-hidden="true" />
+          <span style={{ flex: 1, textAlign: 'left' }}>My Matches</span>
+          <ChevronRight size={18} color="var(--text-muted)" aria-hidden="true" />
+        </button>
+        <button type="button" className="menu-item" onClick={() => setView('wallet')}>
+          <Wallet size={20} color="var(--success-text)" aria-hidden="true" />
+          <span style={{ flex: 1, textAlign: 'left' }}>Wallet &amp; Payments</span>
+          <ChevronRight size={18} color="var(--text-muted)" aria-hidden="true" />
+        </button>
+        <button type="button" className="menu-item" onClick={() => setView('terms')}>
+          <FileText size={20} color="var(--info-text)" aria-hidden="true" />
+          <span style={{ flex: 1, textAlign: 'left' }}>Terms &amp; Conditions</span>
+          <ChevronRight size={18} color="var(--text-muted)" aria-hidden="true" />
+        </button>
+        <button type="button" className="menu-item" onClick={onLogout} style={{ color: 'var(--danger-text)' }}>
+          <LogOut size={20} color="var(--danger-text)" aria-hidden="true" />
+          <span style={{ flex: 1, textAlign: 'left' }}>Logout Account</span>
+          <ChevronRight size={18} color="var(--danger-text)" aria-hidden="true" />
+        </button>
+      </nav>
+    </div>
+  );
 }
 
 const EMPTY_FORM = {

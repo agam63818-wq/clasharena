@@ -17,4 +17,8 @@ describe('src/config/features.js — safe defaults', () => {
   it('roomDetailsRpc defaults OFF — get_room_details() is not applied yet (DB phase)', () => {
     expect(features.roomDetailsRpc).toBe(false);
   });
+
+  it('walletRequests defaults OFF — wallet_requests table + RPCs are not applied yet (DB phase)', () => {
+    expect(features.walletRequests).toBe(false);
+  });
 });

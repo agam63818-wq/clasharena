@@ -140,11 +140,14 @@ begin
       add constraint profiles_balance_nonnegative_check check (balance >= 0) not valid;
   end if;
 
-  -- tournaments.status  [required by code: App.jsx:1026, 1166, 1492]
+  -- tournaments.status  [required by code: src/lib/tournamentStatus.js,
+  -- api/_lib/validate.js TOURNAMENT_STATUSES; 'cancelled' is produced by the
+  -- admin cancel flow — see 006_cancel_tournament_refunds.sql §2, which
+  -- replaces this constraint on a database where an earlier version exists.]
   if not exists (select 1 from pg_constraint where conname = 'tournaments_status_check') then
     alter table public.tournaments
       add constraint tournaments_status_check
-      check (status in ('registration','upcoming','live','completed')) not valid;
+      check (status in ('registration','upcoming','live','completed','cancelled')) not valid;
   end if;
 
   if not exists (select 1 from pg_constraint where conname = 'tournaments_entry_fee_check') then

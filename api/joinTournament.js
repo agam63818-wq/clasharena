@@ -14,6 +14,10 @@
 // TWO PATHS:
 //   - JOIN_USE_RPC === 'true'  -> atomic DB function join_tournament()
 //     (contract in docs/DB_REQUIREMENTS.md §3.1). Preferred.
+//     The function is granted to service_role ONLY and identifies the caller
+//     through its p_user_id parameter, because this route runs with the
+//     service-role key (no JWT -> auth.uid() is NULL). p_user_id is always
+//     user.id as VERIFIED from the Bearer token above — never a body field.
 //   - otherwise -> LEGACY path: best effort, NOT atomic. It uses an optimistic
 //     lock on the balance and a compensating rollback if the registration
 //     insert fails, but concurrent requests can still interleave between its
@@ -42,7 +46,7 @@ export default async function handler(req, res) {
     const supabase = getSupabaseAdmin();
 
     if (process.env.JOIN_USE_RPC === 'true') {
-      return await joinViaRpc(res, supabase, tournamentId, ff_uid, ign);
+      return await joinViaRpc(res, supabase, user.id, tournamentId, ff_uid, ign);
     }
     return await joinLegacy(res, supabase, user.id, tournamentId, ff_uid, ign);
   } catch (err) {
@@ -54,9 +58,14 @@ export default async function handler(req, res) {
 // Atomic path: single DB function does check -> deduct -> insert -> count ->
 // ledger. Its JSON contract (docs/DB_REQUIREMENTS.md §3.1):
 //   { success: true } | { error: string, code?: '23505' }
+//
+// userId is the VERIFIED token subject (requireUser → auth.getUser(token)).
+// p_user_id is the only identity channel: the service-role client has no JWT,
+// so the function cannot and must not use auth.uid().
 // ---------------------------------------------------------------------------
-async function joinViaRpc(res, supabase, tournamentId, ff_uid, ign) {
+async function joinViaRpc(res, supabase, userId, tournamentId, ff_uid, ign) {
   const { data, error } = await supabase.rpc('join_tournament', {
+    p_user_id: userId,
     p_tournament_id: tournamentId,
     p_ff_uid: ff_uid,
     p_ign: ign
@@ -85,6 +94,8 @@ function rpcErrorStatus(message) {
     case 'Insufficient balance': return 400;
     case 'You already joined this tournament': return 409;
     case 'Already joined': return 409;
+    case 'This match has been cancelled': return 409;
+    case 'This match has already ended': return 409;
     case 'Tournament not found': return 404;
     case 'Profile not found': return 404;
     case 'Not authenticated': return 401;
@@ -118,8 +129,12 @@ async function joinLegacy(res, supabase, userId, tournamentId, ff_uid, ign) {
   }
 
   // Minimal status guard (behavior change kept as small as possible):
-  // only finished matches are rejected; 'live'/'upcoming' keep joining as
+  // only closed matches are rejected; 'live'/'upcoming' keep joining as
   // before so existing flows are not broken (permanent rule 5).
+  // A cancelled match is void — nothing may be deducted for it.
+  if (tournament.status === 'cancelled') {
+    throw new HttpError(409, 'This match has been cancelled. You have not been charged.');
+  }
   if (tournament.status === 'completed') {
     throw new HttpError(409, 'This match has already ended.');
   }

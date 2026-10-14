@@ -128,3 +128,17 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+# --- Repo hygiene (docs/AUDIT.md P2-6) -------------------------------------
+# Replit Canvas + pasted prompt/screenshot dumps are editor artifacts, not
+# project sources. They were removed from the index; these entries stop them
+# from coming back. History still contains the old copies (no rewrite done).
+.canvas/
+attached_assets/
+
+# Ad-hoc archives of the repo (the old `clasharena-fixed (1).zip` was one).
+*.zip
+
+# Local build/test artifacts
+dist/
+coverage/
+.vite/

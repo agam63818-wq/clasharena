@@ -1,3 +1,19 @@
+// src/pages/Terms.jsx
+//
+// ⚠ NEEDS OWNER / LEGAL REVIEW — DO NOT PUBLISH AS-IS.
+// This text came with the original app and was not written or checked by a
+// lawyer. It is a placeholder policy, not legal advice. Two things must happen
+// before this page is shown to real paying users:
+//   1. A qualified person (owner + counsel) reviews every clause.
+//   2. The claims are reconciled with what the app actually does. Known
+//      mismatch: §7 "Payments" states payments are "processed through secure
+//      third-party providers" — no payment provider is integrated
+//      (VITE_FEATURE_PAYMENTS is false and the wallet buttons are disabled),
+//      and §8 "Refund Policy" says entry fees are non-refundable while the
+//      tournament-cancellation flow is designed to refund them.
+// See docs/AUDIT.md P1-6. No new legal claims may be added to this file by a
+// coding task (permanent rule 4); wording changes are an owner decision.
+
 import React from 'react';
 import { motion } from 'framer-motion';
 import { ChevronLeft, FileText, Mail } from 'lucide-react';

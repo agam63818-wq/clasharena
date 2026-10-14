@@ -52,7 +52,7 @@ export default async function handler(req, res) {
 
     // Empty tournament: same two-step delete as before, but errors are
     // normalized and a missing tournament is reported as 404.
-    const { data: deletedRegs, error: regError } = await supabase
+    const { error: regError } = await supabase
       .from('match_registrations')
       .delete()
       .eq('tournament_id', tournamentId)

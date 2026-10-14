@@ -64,5 +64,15 @@ export const api = {
     request('/api/joinTournament', { body: { tournamentId, ff_uid, ign } }),
 
   deleteTournament: ({ tournamentId }) =>
-    request('/api/deleteTournament', { body: { tournamentId } })
+    request('/api/deleteTournament', { body: { tournamentId } }),
+
+  // Admin-only actions (server checks the role from the token). getTournament
+  // returns the full row INCLUDING room credentials — the edit form must load
+  // from it, because list queries drop room columns when the room RPC flag is
+  // on and saving from a list row would wipe them with nulls.
+  getTournament: ({ tournamentId }) =>
+    request('/api/admin', { body: { action: 'getTournament', tournamentId } }),
+
+  cancelTournament: ({ tournamentId }) =>
+    request('/api/admin', { body: { action: 'cancelTournament', tournamentId } })
 };

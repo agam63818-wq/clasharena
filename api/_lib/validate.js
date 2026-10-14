@@ -41,3 +41,41 @@ export function validateStringField(value, { field, min, max }) {
   }
   return trimmed;
 }
+
+// --- tournament status -----------------------------------------------------
+//
+// Admins must be able to fix mistakes, so the editable statuses form a fully
+// connected graph: any change among registration/upcoming/live/completed is
+// allowed. 'cancelled' is deliberately NOT a transition target — a tournament
+// only becomes cancelled through the explicit Cancel action (which may carry
+// refund mechanics later), never by silently saving a different status.
+
+export const EDITABLE_STATUSES = ['registration', 'upcoming', 'live', 'completed'];
+
+export const STATUS_TRANSITIONS = EDITABLE_STATUSES.reduce((map, from) => {
+  map[from] = EDITABLE_STATUSES.filter((to) => to !== from);
+  return map;
+}, {});
+
+export function isValidStatus(value) {
+  return typeof value === 'string' && STATUS_TRANSITIONS[value] !== undefined;
+}
+
+export function canTransition(from, to) {
+  return isValidStatus(from) && isValidStatus(to) && STATUS_TRANSITIONS[from].includes(to);
+}
+
+export function validateStatus(value) {
+  if (!isValidStatus(value)) {
+    throw new HttpError(400, 'Invalid tournament status.');
+  }
+  return value;
+}
+
+export function validateStatusTransition(from, to) {
+  validateStatus(to);
+  if (!canTransition(from, to)) {
+    throw new HttpError(400, `Cannot change status from "${from}" to "${to}".`);
+  }
+  return to;
+}

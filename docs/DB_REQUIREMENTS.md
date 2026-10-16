@@ -1,6 +1,32 @@
 # ClashArena — Database Requirements
 
-**Source of truth:** application code in this repo only. The live Supabase project was not inspected; this document states what the code *needs* the database to provide, and what it *should* provide for the audit findings (see `docs/AUDIT.md`) to be closed.
+> ## Contract correction — 2026-10-16
+> The project owner supplied the deployed database facts below. They override the
+> UUID-era assumptions in application code and in the proposed SQL drafts:
+>
+> - `tournaments.id` and `match_registrations.id` are **`bigint`**; every
+>   tournament foreign key, RPC parameter, room-credential key, and audit target
+>   that refers to a tournament must therefore be bigint-compatible.
+> - `tournaments.prize` is **`numeric(12,2)`**.
+> - The deployed standings writer is
+>   **`admin_set_tournament_results(p_tournament_id bigint, p_admin_id uuid, p_results jsonb) -> jsonb`**
+>   with a `{ success, error }` verdict.
+>
+> Do **not** run or edit SQL from this document. The UUID-era drafts are not a
+> migration plan until they have been rewritten and reviewed against this
+> contract. In particular, proposed **003, 005, and 006 must be rewritten for
+> bigint before application**. See §7 for the full draft-by-draft status.
+>
+> **Important application compatibility gap:** the current route validator still
+> accepts UUID tournament IDs. That is not evidence that the deployed bigint
+> contract is wrong; it is an open, separately-scoped application migration item.
+> No ID-validation or feature-flag values are changed by this documentation
+> correction.
+
+**Source of truth:** the owner-supplied deployed contract above plus application
+code in this repo. Where they disagree, the deployed contract wins. The live
+Supabase project was not inspected in this workspace; this document records what
+is known and what the code needs to be made compatible with it.
 
 **Labels:**
 - **[required by code]** — the app queries/writes this today; without it the feature is broken.
@@ -14,7 +40,7 @@ Proposed, **not applied** SQL lives in `supabase/proposed/` (each file header st
 
 ### 1.1 `profiles`
 
-| Column | Type (proposed) | Label | Used by (evidence) |
+| Column | Type / contract | Label | Used by (evidence) |
 |---|---|---|---|
 | `id` | `uuid` PK, = `auth.users.id` | [required by code] | `App.jsx:155` (insert with `data.user.id`), `:352` (`.eq('id', userId)`) |
 | `username` | `text not null` | [required by code] | `App.jsx:156` (insert, defaults to email prefix), display `:839`, admin join `:1058` |
@@ -34,12 +60,12 @@ Notes:
 
 ### 1.2 `tournaments`
 
-| Column | Type (proposed) | Label | Used by (evidence) |
+| Column | Type / contract | Label | Used by (evidence) |
 |---|---|---|---|
-| `id` | `uuid` PK default `gen_random_uuid()` | [required by code] | referenced everywhere; `App.jsx:363` `.eq('id', ...)` |
+| `id` | **`bigint` PK (deployed)** | [required by code] | referenced everywhere; the current UUID-only validator is an open compatibility gap noted above |
 | `name` | `text not null` | [required by code] | admin form `AdminView.jsx`; written server-side by `api/admin.js` `createTournament`/`updateTournament` (3–80 chars, validated there) |
 | `mode` | `text not null default 'Solo'` | [required by code] | admin form `AdminView.jsx` (Solo/Duo/Squad/1v1) → server allow-list `api/_lib/validate.js` `TOURNAMENT_MODES`; display `App.jsx:546, 634` |
-| `prize` | `numeric(12,2) not null default 0` | [required by code] | admin form → `api/admin.js` (>= 0); display `App.jsx:540, 622` |
+| `prize` | **`numeric(12,2)` (deployed)**, not null default `0` | [required by code] | admin form → `api/admin.js` (>= 0); display `App.jsx:540, 622` |
 | `entry_fee` | `numeric(12,2) not null default 0` | [required by code] | **must be the authoritative fee** — read server-side on every join: `api/joinTournament.js` (legacy path) and `join_tournament()` §3.1 (RPC path) derive the charge from this column, never from the client; admin write via `api/admin.js` (>= 0); display `App.jsx:547, 633, 647` |
 | `max_players` | `int not null default 100` | [required by code] | admin form → `api/admin.js` (> 0 and never below the row's `current_players`); capacity checks `api/joinTournament.js`, `App.jsx:587` |
 | `current_players` | `int not null default 0` | [required by code] | written only server-side (join path / `sync_current_players` trigger); **never writable through `api/admin.js`** (the column is not in the validated column set — AUDIT P2-1); display `App.jsx:542, 635` |
@@ -53,10 +79,10 @@ Notes:
 
 ### 1.3 `match_registrations`
 
-| Column | Type (proposed) | Label | Used by (evidence) |
+| Column | Type / contract | Label | Used by (evidence) |
 |---|---|---|---|
-| `id` | `uuid` PK default `gen_random_uuid()` | [required by code] | `App.jsx:571, 583` (`.select('id')`) |
-| `tournament_id` | `uuid not null` FK → `tournaments.id` | [required by code] | `api/joinTournament.js:24–28, 84`, `api/deleteTournament.js:33`, `App.jsx:571, 1405–1416` |
+| `id` | **`bigint` PK (deployed)** | [required by code] | `App.jsx:571, 583` (`.select('id')`) |
+| `tournament_id` | **`bigint not null`** FK → `tournaments.id` | [required by code] | `api/joinTournament.js:24–28, 84`, `api/deleteTournament.js:33`, `App.jsx:571, 1405–1416` |
 | `user_id` | `uuid not null` FK → `auth.users.id` | [required by code] | `api/joinTournament.js:26, 86`, `App.jsx:572, 1418` |
 | `ff_uid` | `text not null` | [required by code] | `api/joinTournament.js:15–18, 87`, admin list `App.jsx:1299` |
 | `ign` | `text not null` | [required by code] | `api/joinTournament.js:16–18, 88`, admin list `App.jsx:1296` |
@@ -68,9 +94,43 @@ Constraints required:
 - FK to `tournaments` with `ON DELETE CASCADE` — [recommended]: `deleteTournament.js:32–44` deletes registrations first, then the tournament, in two non-transactional steps; a cascade (or better, a single delete RPC) removes the orphan window.
 - FK to `auth.users` with `ON DELETE CASCADE` — [recommended] (profile deletion hygiene).
 
+**Bigint compatibility note:** client and server code that currently validates or
+casts a tournament ID as a UUID must be changed in a coordinated application
+release before relying on this deployed schema. `user_id` remains UUID because it
+references Supabase Auth; only tournament / registration identities are bigint.
+
+### 1.3.1 `tournament_results` — deployed standings data
+
+This table is deployed for the results feature; it is not supplied by a proposed
+migration in this repository. At minimum its tournament relationship must be
+`bigint`-compatible:
+
+| Column / contract | Type / rule | Why it matters |
+|---|---|---|
+| `tournament_id` | **`bigint`** FK → `tournaments.id` | Player and admin result reads filter by this value. |
+| `user_id` | `uuid` FK → `profiles.id` / Auth identity | Results are validated against registrations; a player identity remains UUID. |
+| player-safe fields | `placement`, `player_name`, `kills`, `prize_amount` | The player view reads only these fields. `prize_amount` is a recorded standing, **not** a wallet payout. |
+| admin-only field | `note` (if present) | Never expose administrative notes or phone numbers in player-facing results. |
+
+The deployed write contract is exact and must not be replaced with a UUID draft:
+
+```text
+admin_set_tournament_results(
+  p_tournament_id bigint,
+  p_admin_id uuid,
+  p_results jsonb
+) -> jsonb  -- { success, error }
+```
+
+It is called only by `api/admin.js` through the service-role client after the
+server verifies the caller is an admin and that every submitted player belongs to
+the tournament. It atomically replaces recorded standings and marks the
+competition completed. It **does not** credit wallet balances; prizes stay manual
+payout records.
+
 ### 1.4 `transactions`
 
-| Column | Type (proposed) | Label | Used by (evidence) |
+| Column | Type / contract | Label | Used by (evidence) |
 |---|---|---|---|
 | `id` | `uuid` PK default `gen_random_uuid()` | [required by code] | `App.jsx:704` (`tx.id` as key) |
 | `user_id` | `uuid not null` FK → `auth.users.id` | [required by code] | insert `api/joinTournament.js:119–124` (no filter today — audit P0-5) |
@@ -94,7 +154,7 @@ Today's writers store joins **positive**, so the wallet derives the sign from th
 ### 1.5 `wallet_requests` — **[required by code for the wallet-request flags]**
 Created by `supabase/proposed/005_wallet_requests.sql` §1.
 
-| Column | Type (proposed) | Label | Used by (evidence) |
+| Column | Type / contract | Label | Used by (evidence) |
 |---|---|---|---|
 | `id` | `uuid` PK default `gen_random_uuid()` | [required by code] | request keys in `WalletView`/`AdminView` |
 | `user_id` | `uuid not null` FK → `profiles.id` on delete cascade | [required by code] | insert `api/wallet.js` (from the token); admin username lookup (`listWalletRequests`) |
@@ -113,13 +173,13 @@ Constraints: the `decision_check` enforces `(pending ⇒ no reviewer/timestamp)`
 ### 1.6 `admin_audit_log` — **[recommended, permanent rule 3's paper trail]**
 Created by `supabase/proposed/007_admin_audit_log.sql`.
 
-| Column | Type (proposed) | Label | Used by (evidence) |
+| Column | Type / contract | Label | Used by (evidence) |
 |---|---|---|---|
 | `id` | `uuid` PK | [required by code] | — |
 | `admin_id` | `uuid` FK → `profiles.id` on delete set null | [required by code] | `api/_lib/audit.js` (the verified admin from the token) |
 | `action` | `text not null` | [required by code] | `createTournament` / `updateTournament` / `cancelTournament` / `approveWalletRequest` / `rejectWalletRequest` |
 | `target_type` | `text not null` | [required by code] | `'tournament'` or `'wallet_request'` |
-| `target_id` | `uuid` | [required by code] | the affected row |
+| `target_id` | `text` (or separate typed target columns) | [required by code] | must represent a bigint tournament target **or** a UUID wallet-request target; a UUID-only column is incompatible with deployed tournament IDs |
 | `details` | `jsonb not null default '{}'` | [required by code] | e.g. `{"refunded": 4, "reason": "..."}` |
 | `created_at` | `timestamptz not null default now()` | [required by code] | ordering |
 
@@ -145,7 +205,7 @@ The app writes it **best effort**: a missing table never fails an action, but th
 
 ### 2.2 `tournaments`
 - **SELECT**: all authenticated users — [required by code] (home list `App.jsx:363`, detail, MyMatches `:1403–1417`). **But** `room_id`/`room_password` must not be world-readable: the code's `select('*')` makes this a P0-3 leak today. Recommended shape:
-  - **[recommended]** new table `tournament_room_credentials (tournament_id uuid PK/FK, room_id text, room_password text)` + `security definer` function `get_room_details(p_tournament_id)` returning the row **only** when a `match_registrations` row exists for `auth.uid()`; keep the columns on `tournaments` readable only to admins (column-level privileges or view) until the client stops using `select('*')`.
+  - **[recommended]** new table `tournament_room_credentials (tournament_id bigint PK/FK, room_id text, room_password text)` + `security definer` function `get_room_details(p_tournament_id bigint)` returning the row **only** when a `match_registrations` row exists for `auth.uid()`; keep the columns on `tournaments` readable only to admins (column-level privileges or view) until the client stops using `select('*')`.
   - Minimal (matches current behavior, closes nothing): plain select-all. Not recommended.
 - **INSERT / UPDATE / DELETE**: admin only (role from profile or JWT claim) — [required by code for safety]. Since 2026-10-13 the browser no longer writes tournaments at all: `AdminView.jsx` → `src/lib/apiClient.js` → `api/admin.js` (`createTournament`, `updateTournament`), which re-checks the caller's role from `profiles` with the service-role client and validates every field server-side; `api/deleteTournament.js` does the same for deletes. RLS policies for these paths are therefore **defence in depth**, not the only gate (the service role bypasses RLS). Status values constrained to `('registration','upcoming','live','completed')` — [recommended, matches `api/_lib/validate.js` `TOURNAMENT_STATUSES` and `App.jsx:1166`]; note `'cancelled'` is not a valid value yet (the admin router refuses it with an honest 400 until the refund flow exists).
 
@@ -171,7 +231,7 @@ The app writes it **best effort**: a missing table never fails an action, but th
 
 ## 3. Functions
 
-### 3.1 `join_tournament(p_user_id uuid, p_tournament_id uuid, p_ff_uid text, p_ign text) returns json` — **[recommended, closes audit P0-1 + P0-6]**
+### 3.1 `join_tournament(p_user_id uuid, p_tournament_id bigint, p_ff_uid text, p_ign text) returns json` — **[recommended, closes audit P0-1 + P0-6]**
 
 **Called by:** `api/joinTournament.js` only, on the `JOIN_USE_RPC=true` path, through the **service-role** client.
 **Executed as:** `security definer`, and **EXECUTE granted to `service_role` only** (`revoke all … from public, anon, authenticated`).
@@ -180,7 +240,7 @@ The app writes it **best effort**: a missing table never fails an action, but th
 
 - caller identity = **`p_user_id`**, supplied by the API route as `user.id` from `requireUser()` (i.e. the subject of the verified `Authorization: Bearer` token, `supabase.auth.getUser(token)`). It is never read from — and never overridable by — the request body (`api/joinTournament.js`, tests in `tests/api.test.js`).
 - the function is unreachable from the browser: no `anon`/`authenticated` EXECUTE grant.
-- the earlier draft signature `join_tournament(uuid, text, text)` is explicitly `drop function if exists`-ed in `003_functions_triggers.sql` so a stale, wrongly-granted overload cannot linger in a database where that draft was applied.
+- `supabase/proposed/003_functions_triggers.sql` currently declares UUID tournament parameters and cannot be applied unchanged. Its replacement must use `p_tournament_id bigint` in the function, grants/revokes, room RPC, and all verification/rollback signatures; do not run the UUID-era draft.
 
 Single transaction:
 1. Reject a NULL `p_user_id` (`{ error: 'Not authenticated' }`) — the API route already 401s before reaching here; this is defence in depth.
@@ -191,7 +251,7 @@ Single transaction:
 6. Insert the `transactions` ledger row and **check it** (`insert` + `if not found then raise`). A ledger failure raises and rolls the whole function back, so money can never move without a ledger row. It is deliberately not swallowed by an exception handler.
 7. Return the same success/error JSON shape the API uses today (`{ success: true }` / `{ error }`, plus `code: '23505'` for duplicates) to keep response shapes backward compatible (permanent rule 5). `api/joinTournament.js` maps the message strings to HTTP statuses.
 
-### 3.2 `get_room_details(p_tournament_id uuid) returns record` — **[recommended, closes P0-3]**
+### 3.2 `get_room_details(p_tournament_id bigint) returns record` — **[recommended, closes P0-3]**
 
 **Called by:** the **browser** — `src/App.jsx` (`TournamentDetailView`), gated by `VITE_FEATURE_ROOM_RPC` — using the signed-in user's Supabase session through the anon client.
 **Executed as:** `security definer`, **EXECUTE granted to `authenticated`** (revoked from `public`/`anon`).
@@ -222,7 +282,7 @@ If the function is missing, the router answers **503 "requires database setup: t
 
 Why the database and not memory: each serverless invocation may run on a different instance, instances are recycled between requests, and there is no shared in-process state — a module-level counter would neither be shared across instances nor survive a cold start, and would silently under-count under concurrency. The DB count is shared by every instance and is covered by `wallet_requests_user_created_idx`. It is a **coarse abuse brake, not a billing-grade limiter** (the window is fixed at "one hour back from now", and the DB round-trip happens before the insert, so two simultaneous requests can both pass). The DB-phase upgrade is a sliding-window table (or an external store such as Upstash) plus the same check inside the insert path.
 
-### 3.6 `cancel_tournament_with_refund(p_tournament_id uuid, p_admin_id uuid, p_reason text)` — **[required by code for `ENABLE_TOURNAMENT_CANCELLATION`]**
+### 3.6 `cancel_tournament_with_refund(p_tournament_id bigint, p_admin_id uuid, p_reason text)` — **[required by code for `ENABLE_TOURNAMENT_CANCELLATION`]**
 Implemented in `supabase/proposed/006_cancel_tournament_refunds.sql` §3.
 
 **Called by:** `api/admin.js` (`cancelTournament`) through the **service-role** client, and **only** when the tournament has paid registrations AND `ENABLE_TOURNAMENT_CANCELLATION=true`.
@@ -239,6 +299,15 @@ Refunds are **never** looped from the client or from the route: the route only e
 AFTER INSERT/DELETE on `match_registrations`: increment/decrement `tournaments.current_players`. If §3.1 is adopted, this trigger is redundant for the RPC path but protects any other write path (e.g. admin manual inserts).
 
 ### 3.8 `set_updated_at()` trigger — **[recommended]** (standard `updated_at` maintenance) — optional.
+
+### 3.9 `admin_set_tournament_results(p_tournament_id bigint, p_admin_id uuid, p_results jsonb) -> jsonb` — **[deployed]**
+
+This is the deployed results writer used by `api/admin.js`; it is **not** a
+proposed UUID-era function. It returns a JSONB verdict with `success` and/or a
+safe `error` string. The service-role route supplies the verified admin UUID,
+never a client-selected admin. The function must validate bigint tournament
+identity and registered players server-side, replace the standings as one
+operation, and mark the tournament completed without making wallet payouts.
 
 ---
 
@@ -284,18 +353,44 @@ Any DB-phase change must preserve:
 - `POST /api/deleteTournament` responses: `{ success: true }` / `{ error }`.
 - `POST /api/admin` responses: `{ success: true, tournament, auditLogged }` (create/update), `{ success: true, registrations: [...] }` (listRegistrations), `{ success: true, tournament, refunded, auditLogged }` (cancelTournament), `{ success: true, requests: [...] }` (listWalletRequests), `{ success: true, walletRequest, auditLogged }` (approve/reject), `{ error }` on failures — consumed by `src/lib/apiClient.js` + `AdminView.jsx`. Existing keys keep their meaning; `auditLogged` was added and clients must tolerate it being absent. The `{ action }` envelope is part of the contract; the route must stay a **single** file to respect Vercel Hobby's 12-function limit (3 routes total: `joinTournament`, `deleteTournament`, `admin` + `wallet` = 4).
 - `POST /api/wallet` responses: `{ success: true, request }` (createWalletRequest), `{ success: true, requests: [...] }` (listWalletRequests), `{ error }` on failures. `503` carries the honest "not enabled" or "requires database setup" message; `429` carries the rate-limit message.
+- `admin_set_tournament_results` RPC: exact deployed signature `p_tournament_id bigint, p_admin_id uuid, p_results jsonb`; JSONB verdict `{ success, error }`. Do not substitute a UUID tournament ID or infer a wallet payout from a recorded prize.
 - `tournaments.status` gains the value `'cancelled'` (001 + 006 §2). Clients must treat it as a terminal state — `src/lib/tournamentStatus.js` already maps it, and the admin edit form refuses transitions out of it.
 - Table/column names and types as listed in §1 (the client uses `select('*')` in several places, so renaming/removing columns breaks the UI).
 - `tournaments.status` values `registration|upcoming|live|completed` and `profiles.role` value `admin` — the UI branches on these literal strings (`App.jsx:395, 536, 1166, 1492`).
 
 ## 7. Proposed (not applied) migrations
 
-- `supabase/proposed/001_tables_constraints.sql` — tables (if missing), columns, constraints, unique indexes.
-- `supabase/proposed/002_rls_policies.sql` — enable RLS + policies per §2.
-- `supabase/proposed/003_functions_triggers.sql` — `join_tournament`, `get_room_details`, profile-protection trigger, count trigger.
-- `supabase/proposed/004_room_credentials_split.sql` — room-credential table + column lockdown (optional companion to `get_room_details`).
-- `supabase/proposed/005_wallet_requests.sql` — `wallet_requests` (table, constraints, RLS: users insert/select their own rows only, **no update policy**), `approve_wallet_request()` / `reject_wallet_request()` granted to `service_role` only, plus verification queries and rollback notes.
-- `supabase/proposed/006_cancel_tournament_refunds.sql` — the ledger sign convention, the `tournaments_status_check` replacement that allows `'cancelled'`, and `cancel_tournament_with_refund()` (atomic, idempotent, `service_role` only).
-- `supabase/proposed/007_admin_audit_log.sql` — `admin_audit_log` (append-only, RLS enabled with **zero** policies) for the admin actions the router records best-effort.
+### Bigint rewrite gate — do not apply the UUID-era drafts
 
-Each file is idempotent (precondition-checked) and header-stamped: **"NOT APPLIED. For the database phase."** Nothing has been run.
+None of the files below has been run from this workspace. They are historical
+proposals, not approved execution instructions. The deployed bigint contract
+means they must be rewritten and reviewed before any application:
+
+- `supabase/proposed/001_tables_constraints.sql` — **do not apply unchanged**:
+  its tournament / registration schema is UUID-era and conflicts directly with
+  deployed bigint IDs.
+- `supabase/proposed/002_rls_policies.sql` — review after the corrected table
+  identities and foreign keys are settled; it must not reintroduce a UUID
+  tournament assumption.
+- `supabase/proposed/003_functions_triggers.sql` — **must be rewritten for
+  bigint before application**. `join_tournament`, `get_room_details`, all
+  function identity/grant statements, and verification / rollback references
+  need bigint tournament parameters.
+- `supabase/proposed/004_room_credentials_split.sql` — also needs a bigint
+  `tournament_id` FK before application.
+- `supabase/proposed/005_wallet_requests.sql` — **must be rewritten and
+  re-reviewed for the bigint schema before application**, as directed. Its
+  request / user / admin identities may remain UUID, but it is part of the
+  UUID-era migration set and must not be applied as an assumed compatible
+  dependency.
+- `supabase/proposed/006_cancel_tournament_refunds.sql` — **must be rewritten
+  for bigint before application**: `p_tournament_id`, function grant/revoke
+  identities, dry-run examples, and any audit target must accept bigint while
+  `p_admin_id` remains UUID.
+- `supabase/proposed/007_admin_audit_log.sql` — its UUID-only `target_id` is
+  incompatible with logging tournament actions. Use a text target identifier or
+  separate typed target columns before application.
+
+Each existing file is header-stamped: **"NOT APPLIED. For the database phase."**
+Nothing has been run. This document intentionally records the required rewrite;
+it does not change or execute SQL.

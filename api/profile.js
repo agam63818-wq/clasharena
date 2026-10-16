@@ -33,14 +33,17 @@ export default async function handler(req, res) {
 
     // The same caller may re-submit their own number, but no account may claim
     // a number that is already associated with a different profile.
-    const { data: owner, error: ownerError } = await supabase
+    // Older accounts may pre-date the phone uniqueness rule. Limit rather
+    // than maybeSingle() so multiple legacy owners still produce the intended
+    // conflict response instead of PostgREST's "multiple rows" error.
+    const { data: owners, error: ownerError } = await supabase
       .from('profiles')
       .select('id')
       .eq('phone', phone)
       .neq('id', user.id)
-      .maybeSingle();
+      .limit(1);
     if (ownerError) throw ownerError;
-    if (owner) {
+    if ((owners || [])[0]) {
       throw new HttpError(409, PHONE_IN_USE_MESSAGE, 'PHONE_IN_USE');
     }
 

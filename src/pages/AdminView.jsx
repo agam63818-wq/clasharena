@@ -44,11 +44,11 @@ export function parsePrize(value) {
 const HOURS = Array.from({ length: 12 }, (_value, index) => String(index + 1));
 const MINUTES = Array.from({ length: 60 }, (_value, index) => String(index).padStart(2, '0'));
 
-function emptyDateTimeParts() {
+export function emptyDateTimeParts() {
   return { date: '', hour: '12', minute: '00', period: 'AM' };
 }
 
-function getDateTimeParts(value) {
+export function getDateTimeParts(value) {
   if (!value) return emptyDateTimeParts();
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return emptyDateTimeParts();
@@ -62,30 +62,76 @@ function getDateTimeParts(value) {
   };
 }
 
-// A controlled local-time editor. It emits an ISO timestamp, just like the
-// value formToPayload validates and sends to the API; the timezone note makes
-// the local-to-UTC conversion explicit for admins.
-function DateTimeAmPm({ value, onChange, idPrefix, labelledBy }) {
-  const parts = getDateTimeParts(value);
+export function mergeDateTimeParts(parts, next) {
+  return { ...parts, ...next };
+}
+
+// Returns an ISO string only once a complete date is available. Keeping this
+// separate from the component makes the no-date draft behavior testable.
+export function dateTimePartsToIso(parts) {
+  if (!parts?.date) return '';
+  const [year, month, day] = parts.date.split('-').map(Number);
+  let hour24 = Number(parts.hour) % 12;
+  if (parts.period === 'PM') hour24 += 12;
+  const localDate = new Date(year, month - 1, day, hour24, Number(parts.minute), 0, 0);
+  return Number.isNaN(localDate.getTime()) ? '' : localDate.toISOString();
+}
+
+// `emittedValue: null` deliberately means "keep this as a local draft" rather
+// than clear the parent value. It is used while an admin chooses a time before
+// choosing a date.
+export function applyDateTimeDraftUpdate(parts, next) {
+  const nextParts = mergeDateTimeParts(parts, next);
+  if (!nextParts.date) {
+    return {
+      nextParts,
+      emittedValue: parts.date ? '' : null,
+      clearedDate: Boolean(parts.date)
+    };
+  }
+  return {
+    nextParts,
+    emittedValue: dateTimePartsToIso(nextParts),
+    clearedDate: false
+  };
+}
+
+// A controlled local-time editor. Draft time selections live locally until a
+// date is selected, then the parent receives the same UTC ISO timestamp that
+// formToPayload validates and sends to the API.
+export function DateTimeAmPm({ value, onChange, idPrefix, labelledBy }) {
+  const [parts, setParts] = useState(() => getDateTimeParts(value));
+  const previousValue = useRef(value);
+  const clearedDateLocally = useRef(false);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'your local timezone';
 
+  useEffect(() => {
+    const wasValue = previousValue.current;
+    if (value) {
+      // Editing an existing tournament (or a parent-side date update) always
+      // takes precedence over a local draft.
+      setParts(getDateTimeParts(value));
+      clearedDateLocally.current = false;
+    } else if (wasValue && !clearedDateLocally.current) {
+      // A parent reset (for example Edit -> Create) should restore defaults.
+      setParts(emptyDateTimeParts());
+    }
+
+    // When the user explicitly clears the date, retain their hour/minute/AM-PM
+    // draft so choosing another date does not throw it away.
+    if (!value && clearedDateLocally.current) clearedDateLocally.current = false;
+    previousValue.current = value;
+  }, [value]);
+
   const update = (next) => {
-    const nextParts = { ...parts, ...next };
-    if (!nextParts.date) {
-      onChange('');
-      return;
-    }
+    const { nextParts, emittedValue, clearedDate } = applyDateTimeDraftUpdate(parts, next);
+    setParts(nextParts);
 
-    const [year, month, day] = nextParts.date.split('-').map(Number);
-    let hour24 = Number(nextParts.hour) % 12;
-    if (nextParts.period === 'PM') hour24 += 12;
-    const localDate = new Date(year, month - 1, day, hour24, Number(nextParts.minute), 0, 0);
-
-    if (Number.isNaN(localDate.getTime())) {
-      onChange('');
-      return;
-    }
-    onChange(localDate.toISOString());
+    // Do not emit an empty value while the administrator is merely choosing a
+    // time before selecting a date. An explicit removal of an existing date is
+    // the one no-date interaction that must clear the parent value.
+    if (clearedDate) clearedDateLocally.current = true;
+    if (emittedValue !== null) onChange(emittedValue);
   };
 
   return (

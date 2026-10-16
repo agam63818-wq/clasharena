@@ -21,8 +21,10 @@ function setup(steps = [], tokens = { 'tok-A': USER_A }) {
 const duplicateLookup = (c) => c.kind === 'db'
   && c.table === 'profiles'
   && c.op === 'select'
-  && !!c.maybeSingle
-  && c.chain.some(([fn, fields]) => fn === 'select' && fields === 'id');
+  && !c.single
+  && !c.maybeSingle
+  && c.chain.some(([fn, fields]) => fn === 'select' && fields === 'id')
+  && c.chain.some(([fn, value]) => fn === 'limit' && value === 1);
 
 const phoneUpdate = (c) => c.kind === 'db'
   && c.table === 'profiles'
@@ -48,7 +50,7 @@ describe('POST /api/profile — updatePhone', () => {
 
   it('returns 409 when another account already uses the mobile number', async () => {
     const calls = setup([
-      { match: duplicateLookup, value: { data: { id: USER_B.id }, error: null } }
+      { match: duplicateLookup, value: { data: [{ id: USER_B.id }], error: null } }
     ]);
     const res = makeRes();
     await profileHandler(makeReq({ token: 'tok-A', body: { action: 'updatePhone', phone: '9876543210' } }), res);
@@ -58,6 +60,28 @@ describe('POST /api/profile — updatePhone', () => {
       error: 'This mobile number is already linked to another account.',
       code: 'PHONE_IN_USE'
     });
+    expect(calls.some((c) => c.table === 'profiles' && c.op === 'update')).toBe(false);
+  });
+
+  it('returns PHONE_IN_USE instead of a database multiple-row error for two legacy owners', async () => {
+    const calls = setup([
+      {
+        match: duplicateLookup,
+        value: {
+          data: [
+            { id: USER_B.id },
+            { id: '44444444-4444-4444-8444-444444444444' }
+          ],
+          error: null
+        }
+      }
+    ]);
+    const res = makeRes();
+    await profileHandler(makeReq({ token: 'tok-A', body: { action: 'updatePhone', phone: '9876543210' } }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('PHONE_IN_USE');
+    expect(calls.find(duplicateLookup).chain).toContainEqual(['limit', 1]);
     expect(calls.some((c) => c.table === 'profiles' && c.op === 'update')).toBe(false);
   });
 

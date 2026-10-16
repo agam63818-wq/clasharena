@@ -1,3 +1,16 @@
+# START HERE — mandatory session protocol
+
+Before doing **any** work in a new agent session:
+
+1. Read this file, `docs/PROJECT_STATE.md`, and `docs/DB_REQUIREMENTS.md` in full.
+2. Write a **10-line understanding summary** of the current project state, deployed database contract, safety constraints, feature-flag state, and open work.
+3. **Wait for the user's task** after that summary; do not inspect, edit, run, or deploy anything until a task is supplied.
+4. Work only on the Arena-assigned branch (`arena/b00f9890-clasharena` for this session). Update the existing PR; never create another branch or PR unless the user explicitly changes that instruction.
+5. Never write, edit, or run SQL and never touch Supabase unless the user explicitly lifts that restriction. In particular, do not edit `supabase/proposed/*.sql` for documentation-only contract corrections.
+6. Do not change feature-flag values without an explicit user instruction. Database-backed features must fail honestly when their database piece is absent.
+7. Preserve player privacy: ordinary player-facing profile/result data must never expose phone numbers. Tournament prizes are recorded standings; payouts remain manual unless a real approved payment path exists.
+8. At task end, update `docs/PROJECT_STATE.md` with completed work, unchanged flags, and open items; run the requested real checks; commit and push on the assigned branch; then stop. Never merge an existing PR unless the user explicitly asks.
+
 # ClashArena
 
 ## PERMANENT RULES — follow on every task

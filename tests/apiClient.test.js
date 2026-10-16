@@ -118,6 +118,20 @@ describe('src/lib/apiClient.js', () => {
     expect(JSON.parse(init.body)).toEqual({ action: 'listRegistrations' });
   });
 
+  it('loads full tournament details and deletion through the admin route', async () => {
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await api.adminGetTournament({ tournamentId: 't1' });
+    await api.adminDeleteTournament({ tournamentId: 't1' });
+
+    expect(fetchSpy.mock.calls.every(([url]) => url === '/api/admin')).toBe(true);
+    expect(fetchSpy.mock.calls.map(([, init]) => JSON.parse(init.body))).toEqual([
+      { action: 'getTournament', tournamentId: 't1' },
+      { action: 'deleteTournament', tournamentId: 't1' }
+    ]);
+  });
+
   it('an admin call with no session never reaches fetch (401)', async () => {
     state.session = { data: { session: null }, error: null };
     const fetchSpy = vi.fn();

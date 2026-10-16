@@ -8,6 +8,8 @@
 //   POST /api/admin
 //   body: { action: 'createTournament',     tournament: {...} }
 //         { action: 'updateTournament',     tournament: { id, ...fields } }
+//         { action: 'getTournament',        tournamentId }
+//         { action: 'deleteTournament',     tournamentId }
 //         { action: 'listRegistrations' }
 //         { action: 'cancelTournament',     tournamentId, reason? }
 //         { action: 'listWalletRequests' }
@@ -43,13 +45,14 @@
 // "action done, audit note not stored" instead of inventing one.
 //
 // Response shapes (kept in the shape the client already consumes):
-//   success: { success: true, tournament }                        (create/update/cancel)
-//            { success: true, registrations: [] }                 (listRegistrations)
-//            { success: true, requests: [] }                       (listWalletRequests)
-//            { success: true, walletRequest: {...}, auditLogged }  (approve/reject)
+//   success: { success: true, tournament }                         (create/update/cancel/get)
+//            { success: true, tournamentId, auditLogged }          (delete)
+//            { success: true, registrations: [] }                  (listRegistrations)
+//            { success: true, requests: [] }                        (listWalletRequests)
+//            { success: true, walletRequest: {...}, auditLogged }   (approve/reject)
 //   failure: { error: string } — safe messages only, never raw DB errors.
-// `api/deleteTournament.js` is unchanged and still owns deletion (the UI no
-// longer calls it; tournaments are cancelled, not deleted).
+// The older api/deleteTournament.js endpoint remains for backward
+// compatibility; the admin UI uses this central requireAdmin-protected route.
 
 import { requireAdmin } from './_lib/auth.js';
 import { HttpError, sendError } from './_lib/errors.js';
@@ -68,6 +71,9 @@ const REGISTRATION_LIMIT = 500;
 // Bound the pending wallet-request queue an admin screen loads at once.
 const WALLET_QUEUE_LIMIT = 200;
 const MAX_ADMIN_NOTE_LENGTH = 300;
+// Only the admin route may retrieve room credentials. Keep this explicit so a
+// future player-facing query cannot accidentally inherit these private fields.
+const ADMIN_TOURNAMENT_COLUMNS = 'id, name, mode, prize, entry_fee, max_players, current_players, status, match_time, room_id, room_password, image_url, rules, created_at';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -86,6 +92,10 @@ export default async function handler(req, res) {
         return await createTournament(res, supabase, admin, body.tournament);
       case 'updateTournament':
         return await updateTournament(res, supabase, admin, body.tournament);
+      case 'getTournament':
+        return await getTournament(res, supabase, body);
+      case 'deleteTournament':
+        return await deleteTournament(res, supabase, admin, body);
       case 'listRegistrations':
         return await listRegistrations(res, supabase);
       case 'cancelTournament':
@@ -180,10 +190,79 @@ async function updateTournament(res, supabase, admin, input) {
   return res.status(200).json({ success: true, tournament: data, auditLogged });
 }
 
+// Fetch the full row for the edit form. The tournament list deliberately
+// omits room credentials when VITE_FEATURE_ROOM_RPC is enabled, so an admin
+// must load this server-authorized view before submitting an edit.
+async function getTournament(res, supabase, input) {
+  const tournamentId = validateTournamentId(input.tournamentId);
+  const { data, error } = await supabase
+    .from('tournaments')
+    .select(ADMIN_TOURNAMENT_COLUMNS)
+    .eq('id', tournamentId)
+    .single();
+
+  if (error || !data) {
+    throw new HttpError(404, 'Tournament not found.');
+  }
+
+  return res.status(200).json({ success: true, tournament: data });
+}
+
+// Hard deletion is only safe for an empty tournament. A tournament with any
+// registrations must take the explicit cancellation path instead, because it
+// may need the server-side refund transaction.
+async function deleteTournament(res, supabase, admin, input) {
+  const tournamentId = validateTournamentId(input.tournamentId);
+  const { count, error: countError } = await supabase
+    .from('match_registrations')
+    .select('id', { count: 'exact', head: true })
+    .eq('tournament_id', tournamentId);
+
+  if (countError) {
+    console.error('admin: registration count failed before delete:', countError.message);
+    throw new HttpError(500, 'Could not delete the tournament right now.');
+  }
+
+  const registrations = Number(count) || 0;
+  if (registrations > 0) {
+    throw new HttpError(
+      409,
+      `This tournament has ${registrations} registered player(s) and cannot be deleted. Cancel it instead so player refunds can be handled safely.`
+    );
+  }
+
+  const { data, error } = await supabase
+    .from('tournaments')
+    .delete()
+    .eq('id', tournamentId)
+    .select('id, name')
+    .maybeSingle();
+
+  if (error) {
+    console.error('admin: tournament delete failed:', error.message);
+    throw new HttpError(500, 'Could not delete the tournament right now.');
+  }
+  if (!data) {
+    throw new HttpError(404, 'Tournament not found.');
+  }
+
+  const auditLogged = await recordAdminAction(supabase, {
+    adminId: admin.id,
+    action: 'deleteTournament',
+    targetType: 'tournament',
+    targetId: tournamentId,
+    details: { name: data.name || null, registrations: 0 }
+  });
+
+  return res.status(200).json({ success: true, tournamentId, auditLogged });
+}
+
 async function listRegistrations(res, supabase) {
+  // Phone numbers are intentionally selected only here, after requireAdmin()
+  // has succeeded. No player-facing query includes another player's phone.
   const { data, error } = await supabase
     .from('match_registrations')
-    .select('id, tournament_id, ff_uid, ign, created_at, profiles(username)')
+    .select('id, tournament_id, user_id, ff_uid, ign, created_at, profiles(username, phone)')
     .order('created_at', { ascending: false })
     .limit(REGISTRATION_LIMIT);
 

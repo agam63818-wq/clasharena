@@ -9,20 +9,20 @@
 //     anon key (docs/AUDIT.md P1-2).
 //   - the server re-checks the caller's role from the database on every
 //     action; `isAdmin` below is only used to decide what to render.
-//   - tournaments are CANCELLED, not deleted: the server sets the status to
-//     'cancelled' when nothing is owed, and otherwise only cancels through the
-//     atomic refund RPC (flag ENABLE_TOURNAMENT_CANCELLATION) — refusing with
-//     the exact reason when it cannot. The old hard delete
-//     (api/deleteTournament.js) is still on the server but no longer used here.
+//   - tournaments can be hard-deleted only when they have no registrations;
+//     otherwise the admin-only route refuses with the exact reason and the UI
+//     offers the cancellation path. Cancellation sets status to 'cancelled'
+//     when nothing is owed, or uses the atomic refund RPC
+//     (ENABLE_TOURNAMENT_CANCELLATION) when players paid to enter.
 //   - wallet requests (deposit/withdraw) are approved/rejected on the server;
 //     approving calls the DB RPC that moves balance + ledger atomically.
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
   Shield, Plus, Edit, XCircle, Search, ArrowLeft,
   Users, Calendar, Trophy, Loader, AlertCircle, CheckCircle2,
-  Check, X, Wallet
+  Check, X, Wallet, Trash2, Copy, Phone, MessageCircle
 } from 'lucide-react';
 import { api } from '../lib/apiClient';
 import { features } from '../config/features';
@@ -36,9 +36,134 @@ const EMPTY_FORM = {
   max_players: 100, match_time: '', room_id: '', room_password: '', image_url: '', rules: ''
 };
 
+export function parsePrize(value) {
+  const parsed = Number(String(value).replace(/[^0-9.]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+const HOURS = Array.from({ length: 12 }, (_value, index) => String(index + 1));
+const MINUTES = Array.from({ length: 60 }, (_value, index) => String(index).padStart(2, '0'));
+
+function emptyDateTimeParts() {
+  return { date: '', hour: '12', minute: '00', period: 'AM' };
+}
+
+function getDateTimeParts(value) {
+  if (!value) return emptyDateTimeParts();
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return emptyDateTimeParts();
+
+  const hour24 = parsed.getHours();
+  return {
+    date: `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`,
+    hour: String((hour24 % 12) || 12),
+    minute: String(parsed.getMinutes()).padStart(2, '0'),
+    period: hour24 >= 12 ? 'PM' : 'AM'
+  };
+}
+
+// A controlled local-time editor. It emits an ISO timestamp, just like the
+// value formToPayload validates and sends to the API; the timezone note makes
+// the local-to-UTC conversion explicit for admins.
+function DateTimeAmPm({ value, onChange, idPrefix, labelledBy }) {
+  const parts = getDateTimeParts(value);
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'your local timezone';
+
+  const update = (next) => {
+    const nextParts = { ...parts, ...next };
+    if (!nextParts.date) {
+      onChange('');
+      return;
+    }
+
+    const [year, month, day] = nextParts.date.split('-').map(Number);
+    let hour24 = Number(nextParts.hour) % 12;
+    if (nextParts.period === 'PM') hour24 += 12;
+    const localDate = new Date(year, month - 1, day, hour24, Number(nextParts.minute), 0, 0);
+
+    if (Number.isNaN(localDate.getTime())) {
+      onChange('');
+      return;
+    }
+    onChange(localDate.toISOString());
+  };
+
+  return (
+    <div>
+      <div
+        role="group"
+        aria-labelledby={labelledBy}
+        style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) repeat(3, minmax(0, 0.8fr))', gap: 'var(--space-2)' }}
+      >
+        <input
+          id={`${idPrefix}-date`}
+          className="input"
+          type="date"
+          aria-label="Match date"
+          value={parts.date}
+          onChange={event => update({ date: event.target.value })}
+          required
+        />
+        <select
+          id={`${idPrefix}-hour`}
+          className="input"
+          aria-label="Match hour"
+          value={parts.hour}
+          onChange={event => update({ hour: event.target.value })}
+        >
+          {HOURS.map(hour => <option key={hour} value={hour}>{hour}</option>)}
+        </select>
+        <select
+          id={`${idPrefix}-minute`}
+          className="input"
+          aria-label="Match minute"
+          value={parts.minute}
+          onChange={event => update({ minute: event.target.value })}
+        >
+          {MINUTES.map(minute => <option key={minute} value={minute}>{minute}</option>)}
+        </select>
+        <select
+          id={`${idPrefix}-period`}
+          className="input"
+          aria-label="AM or PM"
+          value={parts.period}
+          onChange={event => update({ period: event.target.value })}
+        >
+          <option value="AM">AM</option>
+          <option value="PM">PM</option>
+        </select>
+      </div>
+      <p className="field-hint" style={{ marginTop: 6 }}>Timezone: {timeZone}</p>
+    </div>
+  );
+}
+
+function tournamentToForm(tournament) {
+  return {
+    ...EMPTY_FORM,
+    id: tournament?.id || null,
+    name: tournament?.name || '',
+    prize: parsePrize(tournament?.prize),
+    entry_fee: parsePrize(tournament?.entry_fee),
+    mode: tournament?.mode || 'Solo',
+    status: tournament?.status || 'registration',
+    max_players: Number(tournament?.max_players) || EMPTY_FORM.max_players,
+    match_time: tournament?.match_time || '',
+    room_id: tournament?.room_id ?? '',
+    room_password: tournament?.room_password ?? '',
+    image_url: tournament?.image_url ?? '',
+    rules: tournament?.rules ?? ''
+  };
+}
+
 function TournamentForm({ initial, onSave, onCancel, saving }) {
   const [form, setForm] = useState(initial || EMPTY_FORM);
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  useEffect(() => {
+    setForm(initial || EMPTY_FORM);
+  }, [initial]);
+
+  const set = (key, value) => setForm(current => ({ ...current, [key]: value }));
 
   const field = (label, id, input) => (
     <div className="field">
@@ -48,49 +173,76 @@ function TournamentForm({ initial, onSave, onCancel, saving }) {
   );
 
   return (
-    <form onSubmit={(e) => { e.preventDefault(); onSave(form); }} noValidate>
+    <form onSubmit={(event) => { event.preventDefault(); onSave(form); }} noValidate>
       {field('Tournament name *', 'tf-name',
-        <input id="tf-name" className="input" value={form.name} onChange={e => set('name', e.target.value)} required />
+        <input id="tf-name" className="input" value={form.name} onChange={event => set('name', event.target.value)} required />
       )}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
         {field('Prize (INR) *', 'tf-prize',
-          <input id="tf-prize" className="input" type="number" min="0" step="1" value={form.prize} onChange={e => set('prize', e.target.value)} required />
+          <input id="tf-prize" className="input" type="number" min="0" step="0.01" value={form.prize} onChange={event => set('prize', event.target.value)} required />
         )}
         {field('Entry fee (INR) *', 'tf-fee',
-          <input id="tf-fee" className="input" type="number" min="0" step="1" value={form.entry_fee} onChange={e => set('entry_fee', e.target.value)} required />
+          <input id="tf-fee" className="input" type="number" min="0" step="0.01" value={form.entry_fee} onChange={event => set('entry_fee', event.target.value)} required />
         )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
         {field('Mode', 'tf-mode',
-          <select id="tf-mode" className="input" value={form.mode} onChange={e => { set('mode', e.target.value); if (e.target.value === '1v1') set('max_players', 2); }}>
+          <select id="tf-mode" className="input" value={form.mode} onChange={event => set('mode', event.target.value)}>
             <option>Solo</option><option>Duo</option><option>Squad</option><option value="1v1">1v1</option>
           </select>
         )}
         {field('Status', 'tf-status',
-          <select id="tf-status" className="input" value={form.status} onChange={e => set('status', e.target.value)}>
-            <option value="registration">Registration</option><option value="upcoming">Upcoming</option><option value="live">Live</option>
+          <select
+            id="tf-status"
+            className="input"
+            value={form.status}
+            onChange={event => set('status', event.target.value)}
+            disabled={form.status === 'cancelled'}
+          >
+            <option value="registration">Registration</option>
+            <option value="upcoming">Upcoming</option>
+            <option value="live">Live</option>
+            <option value="completed">Completed</option>
+            {form.status === 'cancelled' && <option value="cancelled">Cancelled</option>}
           </select>
         )}
       </div>
+      {form.status === 'cancelled' && (
+        <p className="field-hint" style={{ marginTop: '-8px', marginBottom: 'var(--space-4)' }}>
+          Cancelled matches cannot be returned to another status from the edit form.
+        </p>
+      )}
       {field('Max players', 'tf-max',
-        <input id="tf-max" className="input" type="number" min="2" step="1" value={form.max_players} onChange={e => set('max_players', e.target.value)} disabled={form.mode === '1v1'} />
+        <input id="tf-max" className="input" type="number" min="1" step="1" value={form.max_players} onChange={event => set('max_players', event.target.value)} />
       )}
-      {field('Match time', 'tf-time',
-        <input id="tf-time" className="input" type="datetime-local" value={form.match_time} onChange={e => set('match_time', e.target.value)} required />
-      )}
+      <div className="field">
+        <span id="tf-time-label" className="field-label">Match time *</span>
+        <DateTimeAmPm
+          value={form.match_time}
+          onChange={value => set('match_time', value)}
+          idPrefix="tf-time"
+          labelledBy="tf-time-label"
+        />
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
         {field('Room ID', 'tf-room-id',
-          <input id="tf-room-id" className="input" value={form.room_id} onChange={e => set('room_id', e.target.value)} autoComplete="off" />
+          <input id="tf-room-id" className="input" value={form.room_id} onChange={event => set('room_id', event.target.value)} autoComplete="off" />
         )}
         {field('Room password', 'tf-room-pw',
-          <input id="tf-room-pw" className="input" value={form.room_password} onChange={e => set('room_password', e.target.value)} autoComplete="new-password" />
+          <input id="tf-room-pw" className="input" value={form.room_password} onChange={event => set('room_password', event.target.value)} autoComplete="new-password" />
         )}
       </div>
+      <p className="field-hint" style={{ marginTop: '-8px', marginBottom: 'var(--space-4)' }}>
+        Leave a room credential blank to clear it.
+      </p>
       {field('Banner image URL', 'tf-image',
-        <input id="tf-image" className="input" type="url" value={form.image_url} onChange={e => set('image_url', e.target.value)} />
+        <input id="tf-image" className="input" type="url" value={form.image_url} onChange={event => set('image_url', event.target.value)} />
       )}
+      <p className="field-hint" style={{ marginTop: '-8px', marginBottom: 'var(--space-4)' }}>
+        Leave the banner URL blank to clear it.
+      </p>
       {field('Rules', 'tf-rules',
-        <textarea id="tf-rules" className="input" rows="4" value={form.rules} onChange={e => set('rules', e.target.value)} />
+        <textarea id="tf-rules" className="input" rows="4" value={form.rules} onChange={event => set('rules', event.target.value)} />
       )}
       <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-4)' }}>
         <button type="submit" className="btn btn-primary" disabled={saving} style={{ flex: 1 }}>
@@ -107,14 +259,21 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
   const [view, setView] = useState('dashboard');
   const [editData, setEditData] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [search, setSearch] = useState('');
   const [feedback, setFeedback] = useState({ type: '', message: '' });
+  const feedbackTimer = useRef(null);
+  const formFeedbackRef = useRef(null);
   const [registrationsByTournament, setRegistrationsByTournament] = useState({});
   const [registrationsLoading, setRegistrationsLoading] = useState(true);
   const [registrationsError, setRegistrationsError] = useState('');
   const [confirmCancel, setConfirmCancel] = useState(null); // tournament row
   const [cancelling, setCancelling] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(null); // tournament row
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteCanCancel, setDeleteCanCancel] = useState(false);
 
   // --- wallet request queue (admin review) ---------------------------------
   const [walletRequests, setWalletRequests] = useState([]);
@@ -183,6 +342,18 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
     loadWalletRequests();
   }, [isAdmin]);
 
+  useEffect(() => () => {
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+  }, []);
+
+  useEffect(() => {
+    if (!feedback.message || (view !== 'create' && view !== 'edit')) return undefined;
+    const frame = requestAnimationFrame(() => {
+      formFeedbackRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [feedback, view]);
+
   if (!isAdmin) {
     return (
       <div className="empty" style={{ minHeight: '50vh' }}>
@@ -194,8 +365,11 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
   }
 
   const showFeedback = (type, message) => {
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     setFeedback({ type, message });
-    if (type === 'success') setTimeout(() => setFeedback({ type: '', message: '' }), 4000);
+    if (type === 'success') {
+      feedbackTimer.current = setTimeout(() => setFeedback({ type: '', message: '' }), 4000);
+    }
   };
 
   // The exact payload sent to the server. It is validated AGAIN server-side
@@ -203,35 +377,50 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
   // below the players already registered, match_time, status transitions).
   const formToPayload = (form) => {
     const date = new Date(form.match_time);
-    return {
+    const optionalText = (value) => {
+      const text = typeof value === 'string' ? value.trim() : '';
+      return text === '' ? null : text;
+    };
+    const payload = {
       name: form.name,
       mode: form.mode,
-      status: form.status,
       prize: Number(form.prize),
       entry_fee: Number(form.entry_fee),
       max_players: Number(form.max_players),
       match_time: date.toISOString(),
-      room_id: form.room_id || null,
-      room_password: form.room_password || null,
-      image_url: form.image_url || null,
-      rules: form.rules || null
+      // These values come from adminGetTournament before editing. They are
+      // null only when the administrator deliberately clears the field.
+      room_id: optionalText(form.room_id),
+      room_password: optionalText(form.room_password),
+      image_url: optionalText(form.image_url),
+      rules: optionalText(form.rules)
     };
+    // `cancelled` can only come from the cancellation flow. Keep its current
+    // status while still allowing other tournament fields to be corrected.
+    if (form.status !== 'cancelled') payload.status = form.status;
+    return payload;
+  };
+
+  const validateForm = (form) => {
+    if (!String(form.name || '').trim()) return 'Tournament name is required.';
+    if (form.prize === '' || !Number.isFinite(Number(form.prize))) return 'Prize must be a valid number.';
+    if (form.entry_fee === '' || !Number.isFinite(Number(form.entry_fee))) return 'Entry fee must be a valid number.';
+    if (!form.match_time) return 'Match time is required.';
+    if (Number.isNaN(new Date(form.match_time).getTime())) return 'Invalid match time.';
+    return '';
   };
 
   const handleCreate = async (form) => {
-    if (!form.name || !form.prize) return showFeedback('error', 'Name and prize are required.');
-    if (!form.match_time) return showFeedback('error', 'Match time is required.');
-
-    const date = new Date(form.match_time);
-    if (isNaN(date.getTime())) return showFeedback('error', 'Invalid match time.');
+    const formError = validateForm(form);
+    if (formError) return showFeedback('error', formError);
 
     setSaving(true);
     try {
-      const result = await api.adminCreateTournament(formToPayload(form));
+      const payload = formToPayload(form);
+      const result = await api.adminCreateTournament(payload);
       const created = result && result.tournament;
-      if (created) setTournaments([created, ...tournaments]);
-      setView('dashboard');
-      showFeedback('success', `"${form.name}" created.`);
+      if (created) setTournaments(current => [created, ...current]);
+      showFeedback('success', `“${form.name}” created.`);
       refreshList();
     } catch (err) {
       // Safe message from the API — never a raw database error.
@@ -242,20 +431,19 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
   };
 
   const handleUpdate = async (form) => {
-    if (!form.name || !form.prize) return showFeedback('error', 'Name and prize are required.');
-    if (!form.match_time) return showFeedback('error', 'Match time is required.');
-
-    const date = new Date(form.match_time);
-    if (isNaN(date.getTime())) return showFeedback('error', 'Invalid match time.');
+    const formError = validateForm(form);
+    if (formError) return showFeedback('error', formError);
+    if (!editData?.id) return showFeedback('error', 'Tournament details are not loaded yet.');
 
     setSaving(true);
     try {
-      const result = await api.adminUpdateTournament({ id: editData.id, ...formToPayload(form) });
+      const payload = formToPayload(form);
+      const result = await api.adminUpdateTournament({ id: editData.id, ...payload });
       const updated = result && result.tournament;
-      setTournaments(tournaments.map(t => t.id === editData.id ? (updated || { ...t, ...formToPayload(form) }) : t));
-      setView('list');
-      setEditData(null);
-      showFeedback('success', `"${form.name}" updated.`);
+      const latest = updated || { ...editData, ...payload };
+      setTournaments(current => current.map(t => t.id === editData.id ? latest : t));
+      setEditData(tournamentToForm(latest));
+      showFeedback('success', `“${form.name}” updated.`);
       refreshList();
     } catch (err) {
       showFeedback('error', err?.message || 'Could not update the tournament.');
@@ -277,7 +465,7 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
       });
       const refunded = Number(result && result.refunded) || 0;
       const auditNote = result && result.auditLogged === false ? ' (audit note could not be stored)' : '';
-      setTournaments(tournaments.map(t => (t.id === confirmCancel.id ? { ...t, status: 'cancelled' } : t)));
+      setTournaments(current => current.map(t => (t.id === confirmCancel.id ? { ...t, status: 'cancelled' } : t)));
       showFeedback(
         'success',
         refunded > 0
@@ -292,6 +480,29 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
       setCancelling(false);
       setConfirmCancel(null);
       setCancelReason('');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirmDelete) return;
+    setDeleting(true);
+    setDeleteError('');
+    setDeleteCanCancel(false);
+    try {
+      const result = await api.adminDeleteTournament({ tournamentId: confirmDelete.id });
+      const auditNote = result && result.auditLogged === false ? ' (audit note could not be stored)' : '';
+      setTournaments(current => current.filter(t => t.id !== confirmDelete.id));
+      showFeedback('success', `“${confirmDelete.name}” permanently deleted.${auditNote}`);
+      setConfirmDelete(null);
+      setDeleteCanCancel(false);
+      refreshList();
+    } catch (err) {
+      // A 409 explains exactly why this match must be cancelled instead. Keep
+      // the dialog open so the administrator can choose that safer action.
+      setDeleteError(err?.message || 'Could not delete the tournament.');
+      setDeleteCanCancel(err?.status === 409);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -321,13 +532,60 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
     }
   };
 
-  const openEdit = (t) => {
-    const parsed = t.match_time ? new Date(t.match_time) : null;
-    const local = parsed && !isNaN(parsed.getTime())
-      ? new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
-      : '';
-    setEditData({ ...t, match_time: local });
-    setView('edit');
+  const openEdit = async (tournament) => {
+    setEditingId(tournament.id);
+    setFeedback({ type: '', message: '' });
+    try {
+      // The list intentionally does not expose room credentials when the room
+      // RPC flag is on. Load the complete row through the admin-only API first
+      // so an unchanged room ID/password is never overwritten with null.
+      const result = await api.adminGetTournament({ tournamentId: tournament.id });
+      const fullTournament = result && result.tournament;
+      if (!fullTournament) throw new Error('Tournament details could not be loaded.');
+      setEditData(tournamentToForm(fullTournament));
+      setView('edit');
+    } catch (err) {
+      showFeedback('error', err?.message || 'Could not load tournament details.');
+    } finally {
+      setEditingId(null);
+    }
+  };
+
+  const copyText = async (text, successMessage) => {
+    if (!text) {
+      showFeedback('error', 'There is no value to copy.');
+      return;
+    }
+
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const fallback = document.createElement('textarea');
+        fallback.value = text;
+        fallback.setAttribute('readonly', '');
+        fallback.style.position = 'fixed';
+        fallback.style.opacity = '0';
+        document.body.appendChild(fallback);
+        fallback.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(fallback);
+        if (!copied) throw new Error('Copy command was unavailable.');
+      }
+      showFeedback('success', successMessage);
+    } catch {
+      showFeedback('error', 'Could not copy to the clipboard.');
+    }
+  };
+
+  const copyAllPlayers = (registrations) => {
+    const lines = registrations.map((player) => {
+      const profile = Array.isArray(player.profiles) ? player.profiles[0] : player.profiles;
+      const username = profile?.username || 'Unknown';
+      const phone = profile?.phone ? String(profile.phone) : 'Not provided';
+      return `${username} | ${player.ign || 'N/A'} | ${player.ff_uid || 'N/A'} | ${phone}`;
+    });
+    copyText(lines.join('\n'), `${registrations.length} player record(s) copied.`);
   };
 
   const stats = {
@@ -354,6 +612,14 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
           </h2>
         </div>
         <div style={{ background: 'var(--bg-surface)', padding: 'var(--space-5)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--border-subtle)' }}>
+          <div ref={formFeedbackRef} tabIndex={-1} aria-live="polite">
+            {feedback.message && (
+              <div className={`feedback ${feedback.type === 'success' ? 'feedback--success' : 'feedback--error'}`} role={feedback.type === 'success' ? 'status' : 'alert'}>
+                {feedback.type === 'success' ? <CheckCircle2 size={16} aria-hidden="true" /> : <AlertCircle size={16} aria-hidden="true" />}
+                {feedback.message}
+              </div>
+            )}
+          </div>
           <TournamentForm
             initial={editData}
             onSave={view === 'create' ? handleCreate : handleUpdate}
@@ -426,14 +692,16 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                    <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
                       <button
                         type="button"
                         className="btn btn-ghost btn--sm"
                         onClick={() => openEdit(t)}
+                        disabled={!!editingId}
                         aria-label={`Edit ${t.name}`}
                       >
-                        <Edit size={16} aria-hidden="true" />
+                        {editingId === t.id ? <Loader size={16} className="spin" aria-hidden="true" /> : <Edit size={16} aria-hidden="true" />}
+                        <span className="visually-hidden">Edit</span>
                       </button>
                       <button
                         type="button"
@@ -443,6 +711,16 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
                         aria-label={`Cancel ${t.name}`}
                       >
                         <XCircle size={16} aria-hidden="true" />
+                        <span className="visually-hidden">Cancel</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn--sm"
+                        onClick={() => { setDeleteError(''); setDeleteCanCancel(false); setConfirmDelete(t); }}
+                        aria-label={`Delete ${t.name}`}
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                        <span className="visually-hidden">Delete</span>
                       </button>
                     </div>
                   </div>
@@ -460,9 +738,20 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
                   </div>
 
                   <div style={{ background: 'var(--bg-inset)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', border: '1px solid var(--border-subtle)' }}>
-                    <h4 style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginBottom: 'var(--space-3)', fontWeight: 'var(--weight-semibold)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                      Registered players ({count})
-                    </h4>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
+                      <h4 style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', fontWeight: 'var(--weight-semibold)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        Registered players ({count})
+                      </h4>
+                      {!registrationsLoading && !registrationsError && count > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn--sm"
+                          onClick={() => copyAllPlayers(registrations)}
+                        >
+                          <Copy size={15} aria-hidden="true" /> Copy all players
+                        </button>
+                      )}
+                    </div>
                     {registrationsError ? (
                       <ErrorRetry message={registrationsError} onRetry={() => window.location.reload()} />
                     ) : registrationsLoading ? (
@@ -472,20 +761,71 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
                     ) : count === 0 ? (
                       <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-base)', fontStyle: 'italic' }}>No players have joined this match yet.</p>
                     ) : (
-                      <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', maxHeight: 200, overflowY: 'auto' }}>
-                        {registrations.map(player => (
-                          <li key={player.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-3)', background: 'var(--bg-surface)', padding: '10px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-                            <div>
-                              <div style={{ color: 'var(--text-primary)', fontSize: 'var(--text-md)', fontWeight: 'var(--weight-semibold)' }}>
-                                {player.profiles?.username || 'Unknown'}
+                      <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                        {registrations.map((player) => {
+                          const profile = Array.isArray(player.profiles) ? player.profiles[0] : player.profiles;
+                          const username = profile?.username || 'Unknown';
+                          const phone = profile?.phone ? String(profile.phone).trim() : '';
+                          const phoneDigits = phone.replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+                          const uid = player.ff_uid ? String(player.ff_uid) : '';
+
+                          return (
+                            <li key={player.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap', background: 'var(--bg-surface)', padding: '10px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                              <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+                                <div style={{ color: 'var(--text-primary)', fontSize: 'var(--text-md)', fontWeight: 'var(--weight-semibold)' }}>
+                                  {username}
+                                </div>
+                                <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-base)' }}>Game name (IGN): {player.ign || 'N/A'}</div>
+                                <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-base)' }}>
+                                  FF UID: <code style={{ color: 'var(--text-secondary)' }}>{uid || 'N/A'}</code>
+                                </div>
+                                <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-base)' }}>Phone: {phone || 'Not provided'}</div>
                               </div>
-                              <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-base)' }}>IGN: {player.ign || 'N/A'}</div>
-                            </div>
-                            <code style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-base)', background: 'var(--bg-inset)', padding: '4px 8px', borderRadius: 'var(--radius-sm)' }}>
-                              UID: {player.ff_uid || 'N/A'}
-                            </code>
-                          </li>
-                        ))}
+                              <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn--sm"
+                                  onClick={() => copyText(uid, 'Free Fire UID copied.')}
+                                  disabled={!uid}
+                                >
+                                  <Copy size={14} aria-hidden="true" /> Copy UID
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn--sm"
+                                  onClick={() => copyText(phone, 'Phone number copied.')}
+                                  disabled={!phone}
+                                >
+                                  <Copy size={14} aria-hidden="true" /> Copy phone
+                                </button>
+                                {phoneDigits ? (
+                                  <a className="btn btn-outline btn--sm" href={`tel:${phoneDigits}`} aria-label={`Call ${username}`}>
+                                    <Phone size={14} aria-hidden="true" /> Call
+                                  </a>
+                                ) : (
+                                  <button type="button" className="btn btn-outline btn--sm" disabled>
+                                    <Phone size={14} aria-hidden="true" /> Call
+                                  </button>
+                                )}
+                                {phoneDigits ? (
+                                  <a
+                                    className="btn btn-outline btn--sm"
+                                    href={`https://wa.me/91${phoneDigits}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    aria-label={`Message ${username} on WhatsApp`}
+                                  >
+                                    <MessageCircle size={14} aria-hidden="true" /> WhatsApp
+                                  </a>
+                                ) : (
+                                  <button type="button" className="btn btn-outline btn--sm" disabled>
+                                    <MessageCircle size={14} aria-hidden="true" /> WhatsApp
+                                  </button>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
                       </ul>
                     )}
                   </div>
@@ -494,6 +834,99 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
             })}
           </div>
         )}
+
+        <Modal
+          open={!!confirmCancel}
+          onClose={() => {
+            if (!cancelling) {
+              setConfirmCancel(null);
+              setCancelReason('');
+            }
+          }}
+          title="Cancel tournament?"
+          labelledBy="cancel-confirm-title"
+        >
+          <p style={{ color: 'var(--text-secondary)', textAlign: 'center', marginBottom: 'var(--space-2)' }}>
+            {confirmCancel?.name ? `“${confirmCancel.name}” will be cancelled.` : ''}
+          </p>
+          <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', textAlign: 'center', marginBottom: 'var(--space-4)' }}>
+            {Number(confirmCancel?.entry_fee) > 0
+              ? 'Players who paid an entry fee are refunded only when this server has the cancellation-with-refunds flag and refund function installed. Otherwise the server refuses and tells you exactly why; nothing is changed.'
+              : 'No entry fee was charged for this match, so cancelling changes only its status.'}
+          </p>
+          <div className="field">
+            <label className="field-label" htmlFor="cancel-reason">Reason (optional, kept in the audit log)</label>
+            <input
+              id="cancel-reason"
+              className="input"
+              value={cancelReason}
+              onChange={event => setCancelReason(event.target.value)}
+              maxLength={300}
+              autoComplete="off"
+            />
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="btn btn-danger" onClick={handleCancel} disabled={cancelling}>
+              {cancelling ? <Loader size={16} className="spin" aria-hidden="true" /> : <XCircle size={16} aria-hidden="true" />}
+              {cancelling ? 'Cancelling…' : 'Cancel tournament'}
+            </button>
+            <button type="button" className="btn btn-outline" onClick={() => { setConfirmCancel(null); setCancelReason(''); }} disabled={cancelling}>
+              Keep it
+            </button>
+          </div>
+        </Modal>
+
+        <Modal
+          open={!!confirmDelete}
+          onClose={() => {
+            if (!deleting) {
+              setConfirmDelete(null);
+              setDeleteError('');
+              setDeleteCanCancel(false);
+            }
+          }}
+          title="Delete tournament?"
+          labelledBy="delete-confirm-title"
+        >
+          <p style={{ color: 'var(--text-secondary)', textAlign: 'center', marginBottom: 'var(--space-2)' }}>
+            {confirmDelete?.name ? `“${confirmDelete.name}” will be permanently deleted.` : ''}
+          </p>
+          <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', textAlign: 'center', marginBottom: 'var(--space-4)' }}>
+            A tournament can be deleted only when no players are registered. If players are registered, the server keeps it intact and you can cancel it instead.
+          </p>
+          {deleteError && (
+            <div className="feedback feedback--error" role="alert">
+              <AlertCircle size={16} aria-hidden="true" /> {deleteError}
+            </div>
+          )}
+          {deleteCanCancel && (
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() => {
+                const tournament = confirmDelete;
+                setConfirmDelete(null);
+                setDeleteError('');
+                setDeleteCanCancel(false);
+                setCancelReason('');
+                setConfirmCancel(tournament);
+              }}
+              disabled={deleting}
+              style={{ marginBottom: 'var(--space-3)' }}
+            >
+              <XCircle size={16} aria-hidden="true" /> Cancel tournament instead
+            </button>
+          )}
+          <div className="modal-actions">
+            <button type="button" className="btn btn-danger" onClick={handleDelete} disabled={deleting}>
+              {deleting ? <Loader size={16} className="spin" aria-hidden="true" /> : <Trash2 size={16} aria-hidden="true" />}
+              {deleting ? 'Deleting…' : 'Delete permanently'}
+            </button>
+            <button type="button" className="btn btn-outline" onClick={() => { setConfirmDelete(null); setDeleteError(''); setDeleteCanCancel(false); }} disabled={deleting}>
+              Keep it
+            </button>
+          </div>
+        </Modal>
       </div>
     );
   }
@@ -614,42 +1047,6 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
           <Edit size={18} aria-hidden="true" /> Manage Existing List
         </button>
       </div>
-
-      <Modal
-        open={!!confirmCancel}
-        onClose={() => !cancelling && setConfirmCancel(null)}
-        title="Cancel tournament?"
-        labelledBy="cancel-confirm-title"
-      >
-        <p style={{ color: 'var(--text-secondary)', textAlign: 'center', marginBottom: 'var(--space-2)' }}>
-          {confirmCancel?.name ? `“${confirmCancel.name}” will be cancelled.` : ''}
-        </p>
-        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)', textAlign: 'center', marginBottom: 'var(--space-4)' }}>
-          {Number(confirmCancel?.entry_fee) > 0
-            ? 'Players who paid an entry fee are refunded — but only when this server has the cancellation-with-refunds flag AND the refund function installed. Otherwise the server refuses and tells you exactly why; nothing is changed.'
-            : 'No entry fee was charged for this match, so cancelling changes only its status.'}
-        </p>
-        <div className="field">
-          <label className="field-label" htmlFor="cancel-reason">Reason (optional, kept in the audit log)</label>
-          <input
-            id="cancel-reason"
-            className="input"
-            value={cancelReason}
-            onChange={e => setCancelReason(e.target.value)}
-            maxLength={300}
-            autoComplete="off"
-          />
-        </div>
-        <div className="modal-actions">
-          <button type="button" className="btn btn-danger" onClick={handleCancel} disabled={cancelling}>
-            {cancelling ? <Loader size={16} className="spin" aria-hidden="true" /> : <XCircle size={16} aria-hidden="true" />}
-            {cancelling ? 'Cancelling…' : 'Cancel tournament'}
-          </button>
-          <button type="button" className="btn btn-outline" onClick={() => setConfirmCancel(null)} disabled={cancelling}>
-            Keep it
-          </button>
-        </div>
-      </Modal>
 
       <Modal
         open={!!reviewTarget}

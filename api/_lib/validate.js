@@ -18,17 +18,19 @@ export function validateTournamentId(value) {
 }
 
 export function validateFfUid(value) {
-  if (typeof value !== 'string' || !FF_UID_RE.test(value)) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!FF_UID_RE.test(trimmed)) {
     throw new HttpError(400, 'Free Fire UID must be 5-20 digits.');
   }
-  return value;
+  return trimmed;
 }
 
 export function validateIgn(value) {
-  if (typeof value !== 'string' || !IGN_RE.test(value)) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!IGN_RE.test(trimmed)) {
     throw new HttpError(400, 'In-game name must be 2-32 letters, numbers, spaces or . - _ \' characters.');
   }
-  return value;
+  return trimmed;
 }
 
 export function validateStringField(value, { field, min, max }) {

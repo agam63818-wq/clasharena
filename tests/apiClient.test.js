@@ -59,6 +59,18 @@ describe('src/lib/apiClient.js', () => {
     expect(JSON.parse(init.body)).toEqual({ tournamentId: 't1', ff_uid: '12345', ign: 'Player' });
   });
 
+  it('sends a phone update through the authenticated profile route', async () => {
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await api.updatePhone({ phone: '9876543210' });
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe('/api/profile');
+    expect(init.headers.Authorization).toBe('Bearer tok-123');
+    expect(JSON.parse(init.body)).toEqual({ action: 'updatePhone', phone: '9876543210' });
+  });
+
   it('normalizes an error response and keeps the machine code (duplicate join)', async () => {
     vi.stubGlobal(
       'fetch',

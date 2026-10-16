@@ -7,9 +7,9 @@
 //     request body is IGNORED (a negative/zero body value can never change a
 //     balance).
 //   - Success response shape is unchanged: { success: true } (permanent
-//     rule 5). Error responses are { error: string } and, for the duplicate
-//     case, { error, code: '23505' } which the client already handles
-//     (src/App.jsx join modal).
+//     rule 5). Error responses are { error: string } plus a narrow machine
+//     code for duplicate joins ('23505') and the phone prerequisite
+//     ('PHONE_REQUIRED'), both handled by the client join modal.
 //
 // TWO PATHS:
 //   - JOIN_USE_RPC === 'true'  -> atomic DB function join_tournament()
@@ -39,11 +39,26 @@ export default async function handler(req, res) {
     const user = await requireUser(req);
 
     const body = req.body || {};
+    const supabase = getSupabaseAdmin();
+
+    // A mobile number is a join prerequisite. Do this immediately after token
+    // verification, before either the RPC or legacy path (and before any
+    // balance/tournament work). The value is never included in this
+    // player-facing response.
+    const { data: callerProfile, error: callerProfileError } = await supabase
+      .from('profiles')
+      .select('id, phone')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (callerProfileError) throw callerProfileError;
+    if (!callerProfile) throw new HttpError(404, 'Profile not found.');
+    if (!String(callerProfile.phone || '').trim()) {
+      throw new HttpError(409, 'Add your mobile number to join', 'PHONE_REQUIRED');
+    }
+
     const tournamentId = validateTournamentId(body.tournamentId);
     const ff_uid = validateFfUid(body.ff_uid);
     const ign = validateIgn(body.ign);
-
-    const supabase = getSupabaseAdmin();
 
     if (process.env.JOIN_USE_RPC === 'true') {
       return await joinViaRpc(res, supabase, user.id, tournamentId, ff_uid, ign);

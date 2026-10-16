@@ -26,7 +26,19 @@ import {
 // --- helpers ---------------------------------------------------------------
 
 function setup(steps, tokens = { 'tok-A': USER_A, 'tok-admin': ADMIN }) {
-  const { client, calls } = createMockClient({ steps, getUser: authGetUserFor(tokens) });
+  // Most join tests are about the tournament path, not the phone prerequisite.
+  // Keep their fixtures focused while still exercising the new service-role
+  // profile read. A test can prepend a more specific caller-profile step to
+  // model a missing number.
+  const defaultCallerPhone = {
+    match: (c) => c.kind === 'db'
+      && c.table === 'profiles'
+      && c.op === 'select'
+      && !!c.maybeSingle
+      && c.chain.some(([fn, fields]) => fn === 'select' && fields === 'id, phone'),
+    value: { data: { id: USER_A.id, phone: '9876543210' }, error: null }
+  };
+  const { client, calls } = createMockClient({ steps: [...steps, defaultCallerPhone], getUser: authGetUserFor(tokens) });
   state.client = client;
   return calls;
 }
@@ -148,6 +160,28 @@ describe('POST /api/joinTournament — server-derived identity and fee', () => {
 // --- joinTournament: business rules ----------------------------------------
 
 describe('POST /api/joinTournament — business rules (legacy path)', () => {
+  it('returns PHONE_REQUIRED before attempting a tournament or wallet change when the caller has no mobile number', async () => {
+    const calls = setup([
+      {
+        match: (c) => c.kind === 'db'
+          && c.table === 'profiles'
+          && c.op === 'select'
+          && !!c.maybeSingle
+          && c.chain.some(([fn, fields]) => fn === 'select' && fields === 'id, phone'),
+        value: { data: { id: USER_A.id, phone: null }, error: null }
+      }
+    ]);
+    const res = makeRes();
+    await joinHandler(makeReq({ token: 'tok-A', body: joinBody() }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toEqual({ error: 'Add your mobile number to join', code: 'PHONE_REQUIRED' });
+    expect(calls.some((c) => c.table === 'tournaments')).toBe(false);
+    expect(calls.some((c) => c.table === 'match_registrations')).toBe(false);
+    expect(calls.some((c) => c.table === 'profiles' && c.op === 'update')).toBe(false);
+    expect(JSON.stringify(res.body)).not.toContain('9876543210');
+  });
+
   it('400 when the tournament is full', async () => {
     setup([
       {
@@ -239,8 +273,9 @@ describe('POST /api/joinTournament — business rules (legacy path)', () => {
 
     expect(res.statusCode).toBe(409);
     expect(res.body.error).toMatch(/cancelled/i);
-    // No balance write, no registration, no ledger row.
-    expect(calls.filter((c) => c.table === 'profiles')).toHaveLength(0);
+    // The caller phone is read first, but no balance write, registration, or
+    // ledger row is created for a cancelled match.
+    expect(calls.filter((c) => c.table === 'profiles' && c.op === 'update')).toHaveLength(0);
     expect(calls.filter((c) => c.table === 'match_registrations')).toHaveLength(0);
     expect(calls.filter((c) => c.table === 'transactions')).toHaveLength(0);
   });
@@ -261,12 +296,14 @@ describe('POST /api/joinTournament — input validation', () => {
   it.each([
     ['bad tournamentId', joinBody({ tournamentId: 'not-a-uuid' }), /invalid tournament/i],
     ['bad ff_uid', joinBody({ ff_uid: 'abc' }), /5-20 digits/i],
+    ['blank ff_uid', joinBody({ ff_uid: '   ' }), /5-20 digits/i],
     ['long ff_uid', joinBody({ ff_uid: '1'.repeat(21) }), /5-20 digits/i],
     ['short ign', joinBody({ ign: 'a' }), /2-32/i],
+    ['blank ign', joinBody({ ign: '   ' }), /2-32/i],
     ['ign with bad chars', joinBody({ ign: '<script>' }), /2-32/i],
     ['missing fields', { tournamentId: TOURNAMENT_ID }, /5-20 digits/i]
   ])('400 for %s', async (_name, body, errMatch) => {
-    setup([]); // no DB steps needed — validation fails before any query
+    setup([]); // setup supplies the required caller-phone read; validation still stops the join path
     const res = makeRes();
     await joinHandler(makeReq({ token: 'tok-A', body }), res);
     expect(res.statusCode).toBe(400);
@@ -295,12 +332,13 @@ describe('POST /api/joinTournament — JOIN_USE_RPC=true', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ success: true });
-    expect(calls[0].fn).toBe('join_tournament');
+    const rpcCall = calls.find((c) => c.kind === 'rpc');
+    expect(rpcCall.fn).toBe('join_tournament');
     // The service-role client has no JWT (auth.uid() is NULL inside the
     // function), so the identity MUST travel as p_user_id — and it must be the
     // token subject, not anything from the body.
-    expect(calls[0].args.p_user_id).toBe(USER_A.id);
-    expect(calls[0].args).toEqual({
+    expect(rpcCall.args.p_user_id).toBe(USER_A.id);
+    expect(rpcCall.args).toEqual({
       p_user_id: USER_A.id,
       p_tournament_id: TOURNAMENT_ID,
       p_ff_uid: '123456789',
@@ -317,7 +355,7 @@ describe('POST /api/joinTournament — JOIN_USE_RPC=true', () => {
     );
 
     expect(res.statusCode).toBe(200);
-    expect(calls[0].args.p_user_id).toBe(USER_A.id);
+    expect(calls.find((c) => c.kind === 'rpc').args.p_user_id).toBe(USER_A.id);
     expect(JSON.stringify(calls)).not.toContain(USER_B.id);
   });
 

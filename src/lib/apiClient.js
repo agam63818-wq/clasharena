@@ -63,6 +63,11 @@ export const api = {
   joinTournament: ({ tournamentId, ff_uid, ign }) =>
     request('/api/joinTournament', { body: { tournamentId, ff_uid, ign } }),
 
+  // Phone numbers are updated through the authenticated server route rather
+  // than a browser database write. The server validates ownership and format.
+  updatePhone: ({ phone }) =>
+    request('/api/profile', { body: { action: 'updatePhone', phone } }),
+
   // Legacy endpoint retained for existing callers. The admin UI uses the
   // requireAdmin-protected adminDeleteTournament action below instead.
   deleteTournament: ({ tournamentId }) =>

@@ -130,6 +130,21 @@ describe('src/lib/apiClient.js', () => {
     expect(JSON.parse(init.body)).toEqual({ action: 'listRegistrations' });
   });
 
+  it('sends result reads and writes through the protected admin route', async () => {
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const results = [{ user_id: 'u1', placement: 1, kills: 7, prize_amount: 500, note: null }];
+
+    await api.adminGetTournamentResults({ tournamentId: 't1' });
+    await api.adminSetTournamentResults({ tournamentId: 't1', results });
+
+    expect(fetchSpy.mock.calls.every(([url]) => url === '/api/admin')).toBe(true);
+    expect(fetchSpy.mock.calls.map(([, init]) => JSON.parse(init.body))).toEqual([
+      { action: 'getTournamentResults', tournamentId: 't1' },
+      { action: 'setTournamentResults', tournamentId: 't1', results }
+    ]);
+  });
+
   it('loads full tournament details and deletion through the admin route', async () => {
     const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 }));
     vi.stubGlobal('fetch', fetchSpy);

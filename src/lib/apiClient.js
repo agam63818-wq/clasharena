@@ -93,6 +93,14 @@ export const api = {
   adminListRegistrations: () =>
     request('/api/admin', { body: { action: 'listRegistrations' } }),
 
+  adminGetTournamentResults: ({ tournamentId }) =>
+    request('/api/admin', { body: { action: 'getTournamentResults', tournamentId } }),
+
+  // Results are recorded by the service-role RPC. This is not a wallet payout:
+  // it only saves standings and the recorded prize amount for each player.
+  adminSetTournamentResults: ({ tournamentId, results }) =>
+    request('/api/admin', { body: { action: 'setTournamentResults', tournamentId, results } }),
+
   // Cancel (not delete): the server decides whether the tournament can simply
   // be closed or needs the atomic refund RPC, and answers 409/503 with the
   // exact reason when it cannot. The UI shows that message verbatim.

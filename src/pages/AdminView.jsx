@@ -275,6 +275,17 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
   const [deleteError, setDeleteError] = useState('');
   const [deleteCanCancel, setDeleteCanCancel] = useState(false);
 
+  // --- tournament results ---------------------------------------------------
+  // Drafts are keyed by the server-authorized registration user_id. Existing
+  // results are loaded through the admin route so private admin notes never
+  // depend on a browser-side table policy.
+  const [resultsTournament, setResultsTournament] = useState(null);
+  const [resultDrafts, setResultDrafts] = useState({});
+  const [resultsLoadState, setResultsLoadState] = useState('idle');
+  const [resultsMessage, setResultsMessage] = useState('');
+  const [resultsMessageType, setResultsMessageType] = useState('');
+  const [savingResults, setSavingResults] = useState(false);
+
   // --- wallet request queue (admin review) ---------------------------------
   const [walletRequests, setWalletRequests] = useState([]);
   const [walletState, setWalletState] = useState(features.walletRequests ? 'loading' : 'off');
@@ -551,6 +562,144 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
     }
   };
 
+  const openResults = async (tournament) => {
+    setResultsTournament(tournament);
+    setResultDrafts({});
+    setResultsMessage('');
+    setResultsMessageType('');
+    setView('results');
+
+    if (!features.tournamentResults) {
+      setResultsLoadState('unavailable');
+      setResultsMessageType('error');
+      setResultsMessage('Tournament results are disabled on this deployment. No standings can be viewed or saved here.');
+      return;
+    }
+
+    setResultsLoadState('loading');
+    try {
+      const result = await api.adminGetTournamentResults({ tournamentId: tournament.id });
+      const drafts = ((result && result.results) || []).reduce((acc, row) => {
+        if (!row?.user_id) return acc;
+        acc[row.user_id] = {
+          placement: row.placement ?? '',
+          kills: row.kills ?? '',
+          prize_amount: row.prize_amount ?? '',
+          note: row.note ?? ''
+        };
+        return acc;
+      }, {});
+      setResultDrafts(drafts);
+      setResultsLoadState('ready');
+    } catch (err) {
+      setResultsLoadState('error');
+      setResultsMessageType('error');
+      setResultsMessage(err?.message || 'Could not load saved tournament results. No changes can be saved until they load.');
+    }
+  };
+
+  const updateResultDraft = (userId, field, value) => {
+    setResultDrafts(current => ({
+      ...current,
+      [userId]: {
+        placement: '',
+        kills: '',
+        prize_amount: '',
+        note: '',
+        ...(current[userId] || {}),
+        [field]: value
+      }
+    }));
+  };
+
+  const buildResultPayload = (registrations) => {
+    const results = [];
+    for (const registration of registrations) {
+      const draft = resultDrafts[registration.user_id] || {};
+      const placement = Number(draft.placement);
+      const kills = Number(draft.kills);
+      const prizeAmount = Number(draft.prize_amount);
+      const note = typeof draft.note === 'string' ? draft.note.trim() : '';
+
+      if (!Number.isInteger(placement) || placement < 1) {
+        throw new Error('Every player needs a whole-number placement of at least 1.');
+      }
+      if (!Number.isInteger(kills) || kills < 0) {
+        throw new Error('Every player needs a whole-number kills value of 0 or more.');
+      }
+      if (!Number.isFinite(prizeAmount) || prizeAmount < 0) {
+        throw new Error('Every player needs a recorded prize amount of 0 or more.');
+      }
+      if (note.length > 300) {
+        throw new Error('Each result note must be at most 300 characters.');
+      }
+
+      results.push({
+        user_id: registration.user_id,
+        placement,
+        kills,
+        prize_amount: Math.round(prizeAmount * 100) / 100,
+        note: note || null
+      });
+    }
+    return results;
+  };
+
+  const handleSaveResults = async () => {
+    if (!resultsTournament) return;
+    if (resultsLoadState !== 'ready') {
+      setResultsMessageType('error');
+      setResultsMessage('Saved results are not ready to edit yet. Please wait or retry loading them first.');
+      return;
+    }
+
+    const registrations = registrationsByTournament[resultsTournament.id] || [];
+    if (registrationsLoading) {
+      setResultsMessageType('error');
+      setResultsMessage('Registered players are still loading. Please wait before saving results.');
+      return;
+    }
+    if (registrations.length === 0) {
+      setResultsMessageType('error');
+      setResultsMessage('This tournament has no registered players to score.');
+      return;
+    }
+
+    let results;
+    try {
+      results = buildResultPayload(registrations);
+    } catch (err) {
+      setResultsMessageType('error');
+      setResultsMessage(err?.message || 'Check the result fields and try again.');
+      return;
+    }
+
+    setSavingResults(true);
+    setResultsMessage('');
+    setResultsMessageType('');
+    try {
+      const result = await api.adminSetTournamentResults({
+        tournamentId: resultsTournament.id,
+        results
+      });
+      const savedTournament = result?.tournament || { id: resultsTournament.id, status: 'completed' };
+      setTournaments(current => current.map(t => (
+        t.id === resultsTournament.id ? { ...t, ...savedTournament, status: 'completed' } : t
+      )));
+      setResultsTournament(current => current ? { ...current, ...savedTournament, status: 'completed' } : current);
+      const auditNote = result?.auditLogged === false ? ' The results were saved, but the audit note could not be stored.' : '';
+      setResultsMessageType('success');
+      setResultsMessage(`Results saved and this tournament is now Completed. Recorded prizes are not wallet payouts; payouts remain manual.${auditNote}`);
+      showFeedback('success', `Results saved for “${resultsTournament.name}”.`);
+      refreshList();
+    } catch (err) {
+      setResultsMessageType('error');
+      setResultsMessage(err?.message || 'Could not save tournament results.');
+    } finally {
+      setSavingResults(false);
+    }
+  };
+
   const copyText = async (text, successMessage) => {
     if (!text) {
       showFeedback('error', 'There is no value to copy.');
@@ -596,6 +745,154 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
   };
 
   const filtered = tournaments.filter(t => (t.name || '').toLowerCase().includes(search.toLowerCase()));
+  const resultsRegistrations = resultsTournament ? (registrationsByTournament[resultsTournament.id] || []) : [];
+
+  // -------------------------
+  // RESULTS VIEW
+  // -------------------------
+  if (view === 'results') {
+    if (!resultsTournament) {
+      return (
+        <div className="view">
+          <ErrorRetry message="Tournament results could not be opened." onRetry={() => setView('list')} />
+        </div>
+      );
+    }
+
+    return (
+      <div className="view">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-5)' }}>
+          <button type="button" className="btn btn-ghost btn--sm" onClick={() => setView('list')} disabled={savingResults}>
+            <ArrowLeft size={16} aria-hidden="true" /> Back
+          </button>
+          <div style={{ minWidth: 0 }}>
+            <h2 style={{ fontSize: 'var(--text-2xl)', fontWeight: 'var(--weight-extrabold)' }}>Tournament Results</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', marginTop: 2 }}>{resultsTournament.name}</p>
+          </div>
+        </div>
+
+        <section aria-label="Result payout note" style={{ background: 'var(--warning-soft)', border: '1px solid var(--warning-border)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', marginBottom: 'var(--space-4)', color: 'var(--warning-text)', fontSize: 'var(--text-sm)' }}>
+          <strong>Recorded standings, not a payout</strong>
+          <p style={{ marginTop: 4, color: 'var(--text-secondary)' }}>Prize amounts saved here are recorded tournament results. Wallet payouts are manual until payments are built.</p>
+        </section>
+
+        {resultsMessage && (
+          <div className={`feedback ${resultsMessageType === 'success' ? 'feedback--success' : 'feedback--error'}`} role={resultsMessageType === 'success' ? 'status' : 'alert'} style={{ marginBottom: 'var(--space-4)' }}>
+            {resultsMessageType === 'success' ? <CheckCircle2 size={16} aria-hidden="true" /> : <AlertCircle size={16} aria-hidden="true" />}
+            {resultsMessage}
+          </div>
+        )}
+
+        {resultsLoadState === 'loading' || registrationsLoading ? (
+          <div role="status" aria-label="Loading tournament results" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+            {[0, 1, 2].map(index => <span key={index} className="skeleton" style={{ display: 'block', height: 88, borderRadius: 'var(--radius-md)' }} />)}
+          </div>
+        ) : resultsLoadState === 'error' || resultsLoadState === 'unavailable' ? (
+          <ErrorRetry
+            message={resultsMessage || 'Tournament results are unavailable.'}
+            onRetry={resultsLoadState === 'error' ? () => openResults(resultsTournament) : () => setView('list')}
+          />
+        ) : registrationsError ? (
+          <div className="feedback feedback--error" role="alert">
+            <AlertCircle size={16} aria-hidden="true" /> Could not load registered players, so results cannot be edited safely. Return to the tournament list and retry.
+          </div>
+        ) : resultsRegistrations.length === 0 ? (
+          <p style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: 'var(--space-5)', color: 'var(--text-muted)', textAlign: 'center' }}>
+            No registered players are available to score for this tournament.
+          </p>
+        ) : (
+          <form onSubmit={(event) => { event.preventDefault(); handleSaveResults(); }} noValidate>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-3)' }}>
+              Saving replaces the previous result set and marks the tournament Completed. Enter a placement, kills and recorded prize for every registered player.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+              {resultsRegistrations.map((player) => {
+                const profile = Array.isArray(player.profiles) ? player.profiles[0] : player.profiles;
+                const playerName = profile?.username || player.ign || 'Unknown player';
+                const draft = resultDrafts[player.user_id] || { placement: '', kills: '', prize_amount: '', note: '' };
+                const fieldPrefix = `result-${player.id || player.user_id}`;
+
+                return (
+                  <section key={player.id || player.user_id} aria-label={`Result for ${playerName}`} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)' }}>
+                    <div style={{ marginBottom: 'var(--space-3)' }}>
+                      <strong style={{ display: 'block', fontSize: 'var(--text-md)' }}>{playerName}</strong>
+                      <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>FF UID: <code>{player.ff_uid || 'Not provided'}</code></span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 'var(--space-2)' }}>
+                      <div className="field" style={{ marginBottom: 0 }}>
+                        <label className="field-label" htmlFor={`${fieldPrefix}-placement`}>Placement</label>
+                        <input
+                          id={`${fieldPrefix}-placement`}
+                          className="input"
+                          type="number"
+                          min="1"
+                          step="1"
+                          inputMode="numeric"
+                          value={draft.placement}
+                          onChange={event => updateResultDraft(player.user_id, 'placement', event.target.value)}
+                          disabled={savingResults}
+                          required
+                        />
+                      </div>
+                      <div className="field" style={{ marginBottom: 0 }}>
+                        <label className="field-label" htmlFor={`${fieldPrefix}-kills`}>Kills</label>
+                        <input
+                          id={`${fieldPrefix}-kills`}
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="1"
+                          inputMode="numeric"
+                          value={draft.kills}
+                          onChange={event => updateResultDraft(player.user_id, 'kills', event.target.value)}
+                          disabled={savingResults}
+                          required
+                        />
+                      </div>
+                      <div className="field" style={{ marginBottom: 0 }}>
+                        <label className="field-label" htmlFor={`${fieldPrefix}-prize`}>Prize (INR)</label>
+                        <input
+                          id={`${fieldPrefix}-prize`}
+                          className="input"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          inputMode="decimal"
+                          value={draft.prize_amount}
+                          onChange={event => updateResultDraft(player.user_id, 'prize_amount', event.target.value)}
+                          disabled={savingResults}
+                          required
+                        />
+                      </div>
+                    </div>
+                    <div className="field" style={{ margin: 'var(--space-3) 0 0' }}>
+                      <label className="field-label" htmlFor={`${fieldPrefix}-note`}>Note (optional)</label>
+                      <input
+                        id={`${fieldPrefix}-note`}
+                        className="input"
+                        value={draft.note}
+                        onChange={event => updateResultDraft(player.user_id, 'note', event.target.value)}
+                        maxLength={300}
+                        autoComplete="off"
+                        disabled={savingResults}
+                      />
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+            <div className="modal-actions" style={{ marginTop: 'var(--space-5)' }}>
+              <button type="submit" className="btn btn-primary" disabled={savingResults}>
+                {savingResults ? <Loader size={17} className="spin" aria-hidden="true" /> : <Trophy size={17} aria-hidden="true" />}
+                {savingResults ? 'Saving results…' : 'Save results & mark Completed'}
+              </button>
+              <button type="button" className="btn btn-outline" onClick={() => setView('list')} disabled={savingResults}>Cancel</button>
+            </div>
+          </form>
+        )}
+      </div>
+    );
+  }
 
   // -------------------------
   // CREATE / EDIT VIEWS
@@ -702,6 +999,14 @@ export default function AdminView({ isAdmin, tournaments, setTournaments, refres
                       >
                         {editingId === t.id ? <Loader size={16} className="spin" aria-hidden="true" /> : <Edit size={16} aria-hidden="true" />}
                         <span className="visually-hidden">Edit</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn--sm"
+                        onClick={() => openResults(t)}
+                        aria-label={`Enter results for ${t.name}`}
+                      >
+                        <Trophy size={15} aria-hidden="true" /> Results
                       </button>
                       <button
                         type="button"

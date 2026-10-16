@@ -79,6 +79,9 @@ const modalContent = {
 // Explicit rather than `*`: a player only needs these fields and must never
 // receive a phone number in ordinary client-side profile data.
 export const PLAYER_PROFILE_COLUMNS = 'id, username, level, wins, role, balance, ff_id, nickname, avatar_url';
+// Player result reads intentionally omit notes and any profile/phone join.
+// `player_name` is the display snapshot recorded by tournament_results.
+export const PLAYER_TOURNAMENT_RESULT_COLUMNS = 'user_id, placement, player_name, kills, prize_amount';
 
 function LoginScreen({ onLogin }) {
   const [identifier, setIdentifier] = useState('');
@@ -799,6 +802,100 @@ export function selectMyMatchTournament(registration, onSelect) {
   return tournament;
 }
 
+function TournamentResultsSection({ tournamentId, currentUserId }) {
+  const [resultState, setResultState] = useState(features.tournamentResults ? 'loading' : 'off');
+  const [results, setResults] = useState([]);
+  const [resultMessage, setResultMessage] = useState('');
+
+  const loadResults = async () => {
+    if (!features.tournamentResults) {
+      setResultState('off');
+      return;
+    }
+
+    setResultState('loading');
+    setResultMessage('');
+    const { data, error } = await supabase
+      .from('tournament_results')
+      // This is deliberately a direct, player-safe table read. Do not add
+      // notes, phone data, or profile embeds to this query.
+      .select(PLAYER_TOURNAMENT_RESULT_COLUMNS)
+      .eq('tournament_id', tournamentId)
+      .order('placement', { ascending: true });
+
+    if (error) {
+      console.error('tournament results query failed:', error.message);
+      setResultState('error');
+      setResultMessage('Could not load recorded results right now.');
+      return;
+    }
+
+    setResults(data || []);
+    setResultState('ready');
+  };
+
+  useEffect(() => {
+    loadResults();
+    // `features` is a module-level object. The result view must reload when
+    // its tournament changes, while the feature flag itself remains static.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see note above
+  }, [tournamentId, features.tournamentResults]);
+
+  return (
+    <section aria-label="Tournament results" style={{ background: 'var(--bg-surface)', padding: 'var(--space-5)', borderRadius: 'var(--radius-lg)', marginBottom: 'var(--space-5)', border: '1px solid var(--border-subtle)' }}>
+      <h3 style={{ color: 'var(--accent-text)', marginBottom: 'var(--space-2)', fontSize: 'var(--text-md)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Results</h3>
+      <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-4)', lineHeight: 1.5 }}>
+        Prize amounts are recorded results. Wallet payouts are manual until payments are built.
+      </p>
+
+      {resultState === 'off' && (
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Tournament results are not available on this deployment.</p>
+      )}
+      {resultState === 'loading' && (
+        <div role="status" aria-label="Loading tournament results" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          {[0, 1, 2].map(index => <span key={index} className="skeleton" style={{ display: 'block', height: 34, borderRadius: 'var(--radius-sm)' }} />)}
+        </div>
+      )}
+      {resultState === 'error' && (
+        <ErrorRetry message={resultMessage} onRetry={loadResults} />
+      )}
+      {resultState === 'ready' && results.length === 0 && (
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Results have not been recorded yet.</p>
+      )}
+      {resultState === 'ready' && results.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 440, fontSize: 'var(--text-sm)' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)' }}>
+                <th scope="col" style={{ padding: '0 8px 8px 0' }}>Place</th>
+                <th scope="col" style={{ padding: '0 8px 8px 0' }}>Player</th>
+                <th scope="col" style={{ padding: '0 8px 8px 0' }}>Kills</th>
+                <th scope="col" style={{ padding: '0 0 8px', textAlign: 'right' }}>Prize</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((result) => {
+                const isCurrentPlayer = Boolean(currentUserId && result.user_id === currentUserId);
+                return (
+                  <tr key={result.user_id} style={{ background: isCurrentPlayer ? 'var(--accent-soft)' : 'transparent', color: 'var(--text-primary)', borderBottom: '1px solid var(--border-subtle)' }}>
+                    <td style={{ padding: '10px 8px 10px 0', fontWeight: 'var(--weight-bold)' }}>#{result.placement}</td>
+                    <td style={{ padding: '10px 8px 10px 0', fontWeight: isCurrentPlayer ? 'var(--weight-extrabold)' : 'var(--weight-medium)' }}>
+                      {result.player_name || (isCurrentPlayer ? 'You' : 'Player')}
+                      {isCurrentPlayer && <span className="visually-hidden"> (your result)</span>}
+                    </td>
+                    <td style={{ padding: '10px 8px 10px 0' }}>{result.kills}</td>
+                    <td style={{ padding: '10px 0', textAlign: 'right', fontWeight: 'var(--weight-semibold)', color: 'var(--gold)' }}>{formatINR(result.prize_amount)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function TournamentDetailView({
   tournament,
   userProfile,
@@ -1143,6 +1240,10 @@ function TournamentDetailView({
           <h3 style={{ color: 'var(--accent-text)', marginBottom: 'var(--space-2)', fontSize: 'var(--text-md)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rules</h3>
           <p style={{ whiteSpace: 'pre-line', fontSize: 'var(--text-md)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{tournament.rules || 'No rules specified.'}</p>
         </section>
+
+        {tournament.status === 'completed' && (
+          <TournamentResultsSection tournamentId={tournament.id} currentUserId={userProfile?.id} />
+        )}
 
         {!alreadyJoined ? (
           <button

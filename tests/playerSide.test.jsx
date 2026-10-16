@@ -14,6 +14,7 @@ vi.mock('../src/lib/apiClient', () => ({
 
 import {
   PLAYER_PROFILE_COLUMNS,
+  PLAYER_TOURNAMENT_RESULT_COLUMNS,
   getJoinPrefill,
   getTournamentForMyMatch,
   selectMyMatchTournament,
@@ -34,6 +35,14 @@ const tournament = {
 describe('player match details', () => {
   it('keeps phone fields out of ordinary player-facing profile data', () => {
     expect(PLAYER_PROFILE_COLUMNS).not.toMatch(/phone/i);
+  });
+
+  it('uses a player-safe direct result selection with standings fields only', () => {
+    expect(PLAYER_TOURNAMENT_RESULT_COLUMNS).toContain('placement');
+    expect(PLAYER_TOURNAMENT_RESULT_COLUMNS).toContain('player_name');
+    expect(PLAYER_TOURNAMENT_RESULT_COLUMNS).toContain('kills');
+    expect(PLAYER_TOURNAMENT_RESULT_COLUMNS).toContain('prize_amount');
+    expect(PLAYER_TOURNAMENT_RESULT_COLUMNS).not.toMatch(/phone|note/i);
   });
 
   it('prefills the join form from the latest saved Free Fire UID and nickname', () => {

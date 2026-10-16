@@ -85,6 +85,7 @@ function LoginScreen({ onLogin }) {
   const [showPassword, setShowPassword] = useState(false);
   const [activeTab, setActiveTab] = useState('login');
   const [error, setError] = useState('');
+  const [signupFieldErrors, setSignupFieldErrors] = useState({});
   const [focusedInput, setFocusedInput] = useState(null);
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -113,28 +114,43 @@ function LoginScreen({ onLogin }) {
     setLoading(false);
   };
   const handleSignup = async () => {
-    const value = identifier.trim();
+    const email = identifier.trim();
+    const cleanUsername = username.trim();
+    const cleanPhone = phone.trim();
+    const fieldErrors = {};
 
-    if (!value || !password) {
-      setError("Fill all fields");
-      return;
+    if (!email) fieldErrors.identifier = 'Enter your email address.';
+    if (!password) fieldErrors.password = 'Enter a password.';
+    if (cleanUsername.length < 3 || cleanUsername.length > 30) {
+      fieldErrors.username = 'Username must be between 3 and 30 characters.';
     }
-    // ✅ ADD HERE
-    if (!/^[6-9]\d{9}$/.test(phone)) {
-      setError("Enter valid 10 digit phone number");
-      return;
+    if (!cleanPhone) {
+      fieldErrors.phone = 'Phone number is required.';
+    } else if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      fieldErrors.phone = 'Phone number must be exactly 10 digits and start with 6, 7, 8, or 9.';
     }
+
+    setSignupFieldErrors(fieldErrors);
+    setError('');
+
+    if (Object.keys(fieldErrors).length > 0) return;
 
     if (!termsAgreed) {
-      setError("Accept terms first");
+      setSignupFieldErrors(current => ({ ...current, terms: 'Accept the Terms & Conditions before signing up.' }));
       return;
     }
 
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signUp({
-      email: value,
-      password
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          username: cleanUsername,
+          phone: cleanPhone
+        }
+      }
     });
 
     if (error) {
@@ -143,36 +159,11 @@ function LoginScreen({ onLogin }) {
       return;
     }
 
-    // `role` is deliberately NOT sent: the profile's role must come from the
-    // database (column default 'user' + the protect_profiles_columns trigger
-    // in supabase/proposed/003_functions_triggers.sql). See the DB-phase note
-    // in docs/DB_REQUIREMENTS.md §2.1 — until the RLS/trigger part is applied,
-    // this insert is still an anon-key write and the database is the only
-    // place that can refuse a forged role/balance.
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .insert([{
-        id: data.user.id,
-        username: username || value.split('@')[0],
-        phone: phone || null
-      }]);
-
-    // ✅ error handling (IMPORTANT)
-    if (profileError) {
-      if (profileError.message.includes('duplicate')) {
-        setError('Username already taken');
-      } else {
-        setError(profileError.message);
-      }
-      setLoading(false);
-      return;
-    }
-
     setActiveTab('login');
     setError('Account created! Please login.');
 
     setLoading(false);
-    };
+  };
 
     return (
     <div className="login-page">
@@ -202,7 +193,7 @@ function LoginScreen({ onLogin }) {
             {['login', 'signup'].map(tab => (
               <button
                 key={tab}
-                onClick={() => { setActiveTab(tab); setError(''); }}
+                onClick={() => { setActiveTab(tab); setError(''); setSignupFieldErrors({}); }}
                 style={{ flex: 1, padding: '10px', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 14, position: 'relative', transition: 'all 0.3s', background: activeTab === tab ? 'linear-gradient(135deg, #ff4d00, #cc2900)' : 'transparent', color: activeTab === tab ? 'white' : '#888' }}
               >
                 {tab === 'login' ? 'Login' : 'Sign Up'}
@@ -227,31 +218,110 @@ function LoginScreen({ onLogin }) {
             <Mail size={20} className="input-icon" aria-hidden="true" />
             {/* The visual design uses an icon + placeholder instead of a <label>;
                 a placeholder is not an accessible name, so it is set explicitly. */}
-            <input className="form-input" placeholder="Email" aria-label="Email address" value={identifier} onChange={e => setIdentifier(e.target.value)} onFocus={() => setFocusedInput('id')} onBlur={() => setFocusedInput(null)} autoComplete="email" />
+            <input
+              className="form-input"
+              placeholder="Email"
+              aria-label="Email address"
+              value={identifier}
+              onChange={e => {
+                setIdentifier(e.target.value);
+                setSignupFieldErrors(current => ({ ...current, identifier: '' }));
+              }}
+              onFocus={() => setFocusedInput('id')}
+              onBlur={() => setFocusedInput(null)}
+              autoComplete="email"
+              aria-invalid={activeTab === 'signup' && !!signupFieldErrors.identifier}
+              aria-describedby={activeTab === 'signup' && signupFieldErrors.identifier ? 'signup-email-error' : undefined}
+            />
           </div>
+          {activeTab === 'signup' && signupFieldErrors.identifier && (
+            <p className="field-error" id="signup-email-error" role="alert" style={{ margin: '4px 0 8px' }}>
+              <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.identifier}
+            </p>
+          )}
 
           <AnimatePresence>
             {activeTab === 'signup' && (
               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
                 <div className="input-group">
                   <User size={20} className="input-icon" aria-hidden="true" />
-                  <input className="form-input" placeholder="Username" aria-label="Username" value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" />
+                  <input
+                    className="form-input"
+                    placeholder="Username"
+                    aria-label="Username"
+                    value={username}
+                    onChange={e => {
+                      setUsername(e.target.value);
+                      setSignupFieldErrors(current => ({ ...current, username: '' }));
+                    }}
+                    autoComplete="username"
+                    aria-invalid={!!signupFieldErrors.username}
+                    aria-describedby={signupFieldErrors.username ? 'signup-username-error' : undefined}
+                  />
                 </div>
+                {signupFieldErrors.username && (
+                  <p className="field-error" id="signup-username-error" role="alert" style={{ margin: '4px 0 8px' }}>
+                    <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.username}
+                  </p>
+                )}
                 <div className="input-group">
                   <Phone size={20} className="input-icon" aria-hidden="true" />
-                  <input className="form-input" placeholder="Phone Number" aria-label="Phone number" value={phone} onChange={e => setPhone(e.target.value)} autoComplete="tel" />
+                  <input
+                    className="form-input"
+                    type="tel"
+                    inputMode="numeric"
+                    placeholder="Phone Number"
+                    aria-label="Phone number"
+                    value={phone}
+                    onChange={e => {
+                      setPhone(e.target.value);
+                      setSignupFieldErrors(current => ({ ...current, phone: '' }));
+                    }}
+                    autoComplete="tel"
+                    aria-invalid={!!signupFieldErrors.phone}
+                    aria-describedby={signupFieldErrors.phone ? 'signup-phone-hint signup-phone-error' : 'signup-phone-hint'}
+                  />
                 </div>
+                <p className="field-hint" id="signup-phone-hint" style={{ margin: '4px 0 4px' }}>
+                  Used by the organizers to contact you about your matches.
+                </p>
+                {signupFieldErrors.phone && (
+                  <p className="field-error" id="signup-phone-error" role="alert" style={{ margin: '0 0 8px' }}>
+                    <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.phone}
+                  </p>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
 
           <div className="input-group" style={{ position: 'relative' }}>
             <Lock size={20} className="input-icon" aria-hidden="true" />
-            <input className="form-input" type={showPassword ? 'text' : 'password'} placeholder="Password" aria-label={activeTab === 'login' ? 'Password' : 'New password'} value={password} onChange={e => setPassword(e.target.value)} onFocus={() => setFocusedInput('pw')} onBlur={() => setFocusedInput(null)} autoComplete={activeTab === 'login' ? 'current-password' : 'new-password'} style={{ paddingRight: 48 }} />
+            <input
+              className="form-input"
+              type={showPassword ? 'text' : 'password'}
+              placeholder="Password"
+              aria-label={activeTab === 'login' ? 'Password' : 'New password'}
+              value={password}
+              onChange={e => {
+                setPassword(e.target.value);
+                setSignupFieldErrors(current => ({ ...current, password: '' }));
+              }}
+              onFocus={() => setFocusedInput('pw')}
+              onBlur={() => setFocusedInput(null)}
+              autoComplete={activeTab === 'login' ? 'current-password' : 'new-password'}
+              style={{ paddingRight: 48 }}
+              aria-invalid={activeTab === 'signup' && !!signupFieldErrors.password}
+              aria-describedby={activeTab === 'signup' && signupFieldErrors.password ? 'signup-password-error' : undefined}
+            />
             <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#888', cursor: 'pointer' }}>
               {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
             </button>
           </div>
+          {activeTab === 'signup' && signupFieldErrors.password && (
+            <p className="field-error" id="signup-password-error" role="alert" style={{ margin: '4px 0 8px' }}>
+              <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.password}
+            </p>
+          )}
 
           <AnimatePresence>
             {activeTab === 'signup' && (
@@ -265,7 +335,12 @@ function LoginScreen({ onLogin }) {
                   <input
                     type="checkbox"
                     checked={termsAgreed}
-                    onChange={e => setTermsAgreed(e.target.checked)}
+                    onChange={e => {
+                      setTermsAgreed(e.target.checked);
+                      setSignupFieldErrors(current => ({ ...current, terms: '' }));
+                    }}
+                    aria-invalid={!!signupFieldErrors.terms}
+                    aria-describedby={signupFieldErrors.terms ? 'signup-terms-error' : undefined}
                     style={{ width: 16, height: 16, accentColor: 'var(--primary)', cursor: 'pointer' }}
                   />
                   <span style={{ fontSize: 13, color: '#aaa', lineHeight: 1.5 }}>
@@ -279,6 +354,11 @@ function LoginScreen({ onLogin }) {
                     </button>
                   </span>
                 </label>
+                {signupFieldErrors.terms && (
+                  <p className="field-error" id="signup-terms-error" role="alert" style={{ margin: '4px 0 0' }}>
+                    <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.terms}
+                  </p>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -434,6 +514,8 @@ export default function App() {
     ff_id: userProfile?.ff_id || '',
     nickname: userProfile?.nickname || ''
   };
+  const profileNeedsCompletion = Boolean(userProfile) && ['phone', 'ff_id', 'nickname']
+    .some(field => !String(userProfile[field] ?? '').trim());
 
   return (
     <MotionConfig reducedMotion="user">
@@ -449,6 +531,30 @@ export default function App() {
             >
               {profileError}
             </div>
+          )}
+          {profileNeedsCompletion && (
+            <section
+              role="status"
+              aria-label="Complete your profile"
+              style={{ margin: '10px 16px 0', padding: '12px', borderRadius: 'var(--radius-md)', background: 'var(--info-soft)', border: '1px solid var(--info-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', minWidth: 0 }}>
+                <User size={20} color="var(--info-text)" aria-hidden="true" style={{ flexShrink: 0 }} />
+                <div>
+                  <strong style={{ color: 'var(--text-primary)', fontSize: 'var(--text-md)' }}>Complete your profile</strong>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', marginTop: 2 }}>Add your Free Fire UID and nickname to get match-ready.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-outline btn--sm"
+                onClick={() => setCurrentView('profile')}
+                aria-label="Open Profile screen to complete your profile"
+                style={{ flexShrink: 0 }}
+              >
+                Profile <ChevronRight size={15} aria-hidden="true" />
+              </button>
+            </section>
           )}
           <main id="main-content" className="main-content">
             <AnimatePresence mode="wait">

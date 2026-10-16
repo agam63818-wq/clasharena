@@ -9,7 +9,7 @@ import {
   Eye, EyeOff, User, Phone,
   Wallet, FileText, LogOut,
   Save, X, Edit2,
-  Clock
+  Clock, Copy
 } from 'lucide-react';
 import supabase from './lib/supabaseClient';
 import { api, ApiError } from './lib/apiClient';
@@ -76,6 +76,13 @@ const modalContent = {
   exit:    { opacity: 0, scale: 0.9, y: 20, transition: { duration: 0.2 } }
 };
 
+// Explicit rather than `*`: a player only needs these fields and must never
+// receive a phone number in ordinary client-side profile data.
+export const PLAYER_PROFILE_COLUMNS = 'id, username, level, wins, role, balance, ff_id, nickname, avatar_url';
+// Player result reads intentionally omit notes and any profile/phone join.
+// `player_name` is the display snapshot recorded by tournament_results.
+export const PLAYER_TOURNAMENT_RESULT_COLUMNS = 'user_id, placement, player_name, kills, prize_amount';
+
 function LoginScreen({ onLogin }) {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -85,6 +92,7 @@ function LoginScreen({ onLogin }) {
   const [showPassword, setShowPassword] = useState(false);
   const [activeTab, setActiveTab] = useState('login');
   const [error, setError] = useState('');
+  const [signupFieldErrors, setSignupFieldErrors] = useState({});
   const [focusedInput, setFocusedInput] = useState(null);
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [showTermsModal, setShowTermsModal] = useState(false);
@@ -113,28 +121,43 @@ function LoginScreen({ onLogin }) {
     setLoading(false);
   };
   const handleSignup = async () => {
-    const value = identifier.trim();
+    const email = identifier.trim();
+    const cleanUsername = username.trim();
+    const cleanPhone = phone.trim();
+    const fieldErrors = {};
 
-    if (!value || !password) {
-      setError("Fill all fields");
-      return;
+    if (!email) fieldErrors.identifier = 'Enter your email address.';
+    if (!password) fieldErrors.password = 'Enter a password.';
+    if (cleanUsername.length < 3 || cleanUsername.length > 30) {
+      fieldErrors.username = 'Username must be between 3 and 30 characters.';
     }
-    // ✅ ADD HERE
-    if (!/^[6-9]\d{9}$/.test(phone)) {
-      setError("Enter valid 10 digit phone number");
-      return;
+    if (!cleanPhone) {
+      fieldErrors.phone = 'Phone number is required.';
+    } else if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      fieldErrors.phone = 'Phone number must be exactly 10 digits and start with 6, 7, 8, or 9.';
     }
+
+    setSignupFieldErrors(fieldErrors);
+    setError('');
+
+    if (Object.keys(fieldErrors).length > 0) return;
 
     if (!termsAgreed) {
-      setError("Accept terms first");
+      setSignupFieldErrors(current => ({ ...current, terms: 'Accept the Terms & Conditions before signing up.' }));
       return;
     }
 
     setLoading(true);
 
-    const { data, error } = await supabase.auth.signUp({
-      email: value,
-      password
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          username: cleanUsername,
+          phone: cleanPhone
+        }
+      }
     });
 
     if (error) {
@@ -143,36 +166,11 @@ function LoginScreen({ onLogin }) {
       return;
     }
 
-    // `role` is deliberately NOT sent: the profile's role must come from the
-    // database (column default 'user' + the protect_profiles_columns trigger
-    // in supabase/proposed/003_functions_triggers.sql). See the DB-phase note
-    // in docs/DB_REQUIREMENTS.md §2.1 — until the RLS/trigger part is applied,
-    // this insert is still an anon-key write and the database is the only
-    // place that can refuse a forged role/balance.
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .insert([{
-        id: data.user.id,
-        username: username || value.split('@')[0],
-        phone: phone || null
-      }]);
-
-    // ✅ error handling (IMPORTANT)
-    if (profileError) {
-      if (profileError.message.includes('duplicate')) {
-        setError('Username already taken');
-      } else {
-        setError(profileError.message);
-      }
-      setLoading(false);
-      return;
-    }
-
     setActiveTab('login');
     setError('Account created! Please login.');
 
     setLoading(false);
-    };
+  };
 
     return (
     <div className="login-page">
@@ -202,7 +200,7 @@ function LoginScreen({ onLogin }) {
             {['login', 'signup'].map(tab => (
               <button
                 key={tab}
-                onClick={() => { setActiveTab(tab); setError(''); }}
+                onClick={() => { setActiveTab(tab); setError(''); setSignupFieldErrors({}); }}
                 style={{ flex: 1, padding: '10px', borderRadius: 10, border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: 14, position: 'relative', transition: 'all 0.3s', background: activeTab === tab ? 'linear-gradient(135deg, #ff4d00, #cc2900)' : 'transparent', color: activeTab === tab ? 'white' : '#888' }}
               >
                 {tab === 'login' ? 'Login' : 'Sign Up'}
@@ -227,31 +225,110 @@ function LoginScreen({ onLogin }) {
             <Mail size={20} className="input-icon" aria-hidden="true" />
             {/* The visual design uses an icon + placeholder instead of a <label>;
                 a placeholder is not an accessible name, so it is set explicitly. */}
-            <input className="form-input" placeholder="Email" aria-label="Email address" value={identifier} onChange={e => setIdentifier(e.target.value)} onFocus={() => setFocusedInput('id')} onBlur={() => setFocusedInput(null)} autoComplete="email" />
+            <input
+              className="form-input"
+              placeholder="Email"
+              aria-label="Email address"
+              value={identifier}
+              onChange={e => {
+                setIdentifier(e.target.value);
+                setSignupFieldErrors(current => ({ ...current, identifier: '' }));
+              }}
+              onFocus={() => setFocusedInput('id')}
+              onBlur={() => setFocusedInput(null)}
+              autoComplete="email"
+              aria-invalid={activeTab === 'signup' && !!signupFieldErrors.identifier}
+              aria-describedby={activeTab === 'signup' && signupFieldErrors.identifier ? 'signup-email-error' : undefined}
+            />
           </div>
+          {activeTab === 'signup' && signupFieldErrors.identifier && (
+            <p className="field-error" id="signup-email-error" role="alert" style={{ margin: '4px 0 8px' }}>
+              <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.identifier}
+            </p>
+          )}
 
           <AnimatePresence>
             {activeTab === 'signup' && (
               <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
                 <div className="input-group">
                   <User size={20} className="input-icon" aria-hidden="true" />
-                  <input className="form-input" placeholder="Username" aria-label="Username" value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" />
+                  <input
+                    className="form-input"
+                    placeholder="Username"
+                    aria-label="Username"
+                    value={username}
+                    onChange={e => {
+                      setUsername(e.target.value);
+                      setSignupFieldErrors(current => ({ ...current, username: '' }));
+                    }}
+                    autoComplete="username"
+                    aria-invalid={!!signupFieldErrors.username}
+                    aria-describedby={signupFieldErrors.username ? 'signup-username-error' : undefined}
+                  />
                 </div>
+                {signupFieldErrors.username && (
+                  <p className="field-error" id="signup-username-error" role="alert" style={{ margin: '4px 0 8px' }}>
+                    <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.username}
+                  </p>
+                )}
                 <div className="input-group">
                   <Phone size={20} className="input-icon" aria-hidden="true" />
-                  <input className="form-input" placeholder="Phone Number" aria-label="Phone number" value={phone} onChange={e => setPhone(e.target.value)} autoComplete="tel" />
+                  <input
+                    className="form-input"
+                    type="tel"
+                    inputMode="numeric"
+                    placeholder="Phone Number"
+                    aria-label="Phone number"
+                    value={phone}
+                    onChange={e => {
+                      setPhone(e.target.value);
+                      setSignupFieldErrors(current => ({ ...current, phone: '' }));
+                    }}
+                    autoComplete="tel"
+                    aria-invalid={!!signupFieldErrors.phone}
+                    aria-describedby={signupFieldErrors.phone ? 'signup-phone-hint signup-phone-error' : 'signup-phone-hint'}
+                  />
                 </div>
+                <p className="field-hint" id="signup-phone-hint" style={{ margin: '4px 0 4px' }}>
+                  Used by the organizers to contact you about your matches.
+                </p>
+                {signupFieldErrors.phone && (
+                  <p className="field-error" id="signup-phone-error" role="alert" style={{ margin: '0 0 8px' }}>
+                    <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.phone}
+                  </p>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
 
           <div className="input-group" style={{ position: 'relative' }}>
             <Lock size={20} className="input-icon" aria-hidden="true" />
-            <input className="form-input" type={showPassword ? 'text' : 'password'} placeholder="Password" aria-label={activeTab === 'login' ? 'Password' : 'New password'} value={password} onChange={e => setPassword(e.target.value)} onFocus={() => setFocusedInput('pw')} onBlur={() => setFocusedInput(null)} autoComplete={activeTab === 'login' ? 'current-password' : 'new-password'} style={{ paddingRight: 48 }} />
+            <input
+              className="form-input"
+              type={showPassword ? 'text' : 'password'}
+              placeholder="Password"
+              aria-label={activeTab === 'login' ? 'Password' : 'New password'}
+              value={password}
+              onChange={e => {
+                setPassword(e.target.value);
+                setSignupFieldErrors(current => ({ ...current, password: '' }));
+              }}
+              onFocus={() => setFocusedInput('pw')}
+              onBlur={() => setFocusedInput(null)}
+              autoComplete={activeTab === 'login' ? 'current-password' : 'new-password'}
+              style={{ paddingRight: 48 }}
+              aria-invalid={activeTab === 'signup' && !!signupFieldErrors.password}
+              aria-describedby={activeTab === 'signup' && signupFieldErrors.password ? 'signup-password-error' : undefined}
+            />
             <button type="button" onClick={() => setShowPassword(v => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'} style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#888', cursor: 'pointer' }}>
               {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
             </button>
           </div>
+          {activeTab === 'signup' && signupFieldErrors.password && (
+            <p className="field-error" id="signup-password-error" role="alert" style={{ margin: '4px 0 8px' }}>
+              <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.password}
+            </p>
+          )}
 
           <AnimatePresence>
             {activeTab === 'signup' && (
@@ -265,7 +342,12 @@ function LoginScreen({ onLogin }) {
                   <input
                     type="checkbox"
                     checked={termsAgreed}
-                    onChange={e => setTermsAgreed(e.target.checked)}
+                    onChange={e => {
+                      setTermsAgreed(e.target.checked);
+                      setSignupFieldErrors(current => ({ ...current, terms: '' }));
+                    }}
+                    aria-invalid={!!signupFieldErrors.terms}
+                    aria-describedby={signupFieldErrors.terms ? 'signup-terms-error' : undefined}
                     style={{ width: 16, height: 16, accentColor: 'var(--primary)', cursor: 'pointer' }}
                   />
                   <span style={{ fontSize: 13, color: '#aaa', lineHeight: 1.5 }}>
@@ -279,6 +361,11 @@ function LoginScreen({ onLogin }) {
                     </button>
                   </span>
                 </label>
+                {signupFieldErrors.terms && (
+                  <p className="field-error" id="signup-terms-error" role="alert" style={{ margin: '4px 0 0' }}>
+                    <AlertCircle size={13} aria-hidden="true" /> {signupFieldErrors.terms}
+                  </p>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -338,6 +425,9 @@ export default function App() {
   const [userProfile, setUserProfile] = useState(null);
   const [currentView, setCurrentView] = useState('home');
   const [selectedTournament, setSelectedTournament] = useState(null);
+  const [tournamentBackView, setTournamentBackView] = useState('home');
+  const [tournamentDetailLoading, setTournamentDetailLoading] = useState(false);
+  const [tournamentDetailError, setTournamentDetailError] = useState('');
   const [tournaments, setTournaments] = useState([]);
   const [tournamentsLoading, setTournamentsLoading] = useState(true);
   const [tournamentsError, setTournamentsError] = useState('');
@@ -353,7 +443,14 @@ export default function App() {
   const [profileError, setProfileError] = useState('');
 
   const fetchProfile = async (userId) => {
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    // Player-facing profile state never requests a phone number. Phone is
+    // handled only by the authenticated server join/profile routes and is
+    // surfaced to admins through their protected registration endpoint.
+    const { data, error } = await supabase
+      .from('profiles')
+      .select(PLAYER_PROFILE_COLUMNS)
+      .eq('id', userId)
+      .single();
     if (error || !data) {
       // Honest failure state (docs/AUDIT.md P1-5): never silently pretend a
       // missing profile is fine — wallet/joins depend on it.
@@ -395,6 +492,54 @@ export default function App() {
     return data || [];
   };
 
+  const openTournament = async (candidate, backView = 'home') => {
+    const tournamentId = typeof candidate === 'string'
+      ? candidate
+      : candidate?.id || candidate?.tournament_id || candidate?.tournaments?.id;
+    if (!tournamentId) return;
+
+    setTournamentBackView(backView);
+    setTournamentDetailError('');
+    setCurrentView('tournament');
+
+    // Tournament cards on Home already have the player-safe full row. My
+    // Matches can arrive before that list (or with a partial embedded row), so
+    // resolve the canonical row by ID before showing its detail view.
+    const fromList = tournaments.find(item => item.id === tournamentId);
+    if (fromList) {
+      setSelectedTournament(fromList);
+      setTournamentDetailLoading(false);
+      return;
+    }
+
+    setSelectedTournament({ id: tournamentId });
+    setTournamentDetailLoading(true);
+    const columns = features.roomDetailsRpc
+      ? 'id, name, mode, prize, entry_fee, max_players, current_players, status, match_time, image_url, rules, created_at'
+      : '*';
+    const { data, error } = await supabase
+      .from('tournaments')
+      .select(columns)
+      .eq('id', tournamentId)
+      .single();
+
+    if (error || !data) {
+      console.error('tournament detail query failed:', error?.message || 'row not found');
+      setTournamentDetailError('Could not load this match. Please try again.');
+      setTournamentDetailLoading(false);
+      return;
+    }
+
+    setSelectedTournament(data);
+    setTournamentDetailLoading(false);
+  };
+
+  const returnToTournamentSource = () => {
+    setTournamentDetailLoading(false);
+    setTournamentDetailError('');
+    setCurrentView(tournamentBackView);
+  };
+
   useEffect(() => {
     if (session?.user?.id) fetchTournaments();
     // Intentional: one fetch per authenticated session. fetchTournaments is
@@ -434,6 +579,8 @@ export default function App() {
     ff_id: userProfile?.ff_id || '',
     nickname: userProfile?.nickname || ''
   };
+  const profileNeedsCompletion = Boolean(userProfile) && ['ff_id', 'nickname']
+    .some(field => !String(userProfile[field] ?? '').trim());
 
   return (
     <MotionConfig reducedMotion="user">
@@ -450,6 +597,30 @@ export default function App() {
               {profileError}
             </div>
           )}
+          {profileNeedsCompletion && (
+            <section
+              role="status"
+              aria-label="Complete your profile"
+              style={{ margin: '10px 16px 0', padding: '12px', borderRadius: 'var(--radius-md)', background: 'var(--info-soft)', border: '1px solid var(--info-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', minWidth: 0 }}>
+                <User size={20} color="var(--info-text)" aria-hidden="true" style={{ flexShrink: 0 }} />
+                <div>
+                  <strong style={{ color: 'var(--text-primary)', fontSize: 'var(--text-md)' }}>Complete your profile</strong>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', marginTop: 2 }}>Add your Free Fire UID and nickname to get match-ready.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-outline btn--sm"
+                onClick={() => setCurrentView('profile')}
+                aria-label="Open Profile screen to complete your profile"
+                style={{ flexShrink: 0 }}
+              >
+                Profile <ChevronRight size={15} aria-hidden="true" />
+              </button>
+            </section>
+          )}
           <main id="main-content" className="main-content">
             <AnimatePresence mode="wait">
               {currentView === 'home' && (
@@ -459,13 +630,22 @@ export default function App() {
                     loading={tournamentsLoading}
                     error={tournamentsError}
                     onRetry={fetchTournaments}
-                    onTournamentSelect={t => { setSelectedTournament(t); setCurrentView('tournament'); }}
+                    onTournamentSelect={t => openTournament(t, 'home')}
                   />
                 </motion.div>
               )}
             {currentView === 'tournament' && (
               <motion.div key="tournament" variants={pageVariants} initial="initial" animate="animate" exit="exit">
-                <TournamentDetailView tournament={selectedTournament} userProfile={userProfile} setView={setCurrentView} onJoinSuccess={fetchTournaments} />
+                <TournamentDetailView
+                  tournament={selectedTournament}
+                  userProfile={userProfile}
+                  loading={tournamentDetailLoading}
+                  loadError={tournamentDetailError}
+                  onBack={returnToTournamentSource}
+                  onRetry={() => selectedTournament?.id && openTournament(selectedTournament.id, tournamentBackView)}
+                  onJoinSuccess={fetchTournaments}
+                  onProfileUpdate={() => fetchProfile(session.user.id)}
+                />
               </motion.div>
             )}
             {currentView === 'wallet' && (
@@ -486,7 +666,11 @@ export default function App() {
             )}
             {currentView === 'myMatches' && (
               <motion.div key="myMatches" variants={pageVariants} initial="initial" animate="animate" exit="exit">
-                <MyMatchesView userId={session.user.id} setView={setCurrentView} />
+                <MyMatchesView
+                  userId={session.user.id}
+                  setView={setCurrentView}
+                  onTournamentSelect={tournament => openTournament(tournament, 'myMatches')}
+                />
               </motion.div>
             )}
             {currentView === 'terms' && (
@@ -589,30 +773,204 @@ function HomeView({ tournaments, loading, error, onRetry, onTournamentSelect }) 
   );
 }
 
-function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess }) {
+// Join values are deliberately derived from the current parent-held profile,
+// not copied once at sign-in. This lets a Profile save flow into a later match
+// join without a browser reload.
+export function getJoinPrefill(profile) {
+  const ff_uid = typeof profile?.ff_id === 'string' ? profile.ff_id.trim() : '';
+  const ign = typeof profile?.nickname === 'string' ? profile.nickname.trim() : '';
+  return {
+    ff_uid,
+    ign,
+    hasSavedGameDetails: Boolean(ff_uid && ign)
+  };
+}
+
+// My Matches receives an embedded tournament when PostgREST can supply one,
+// but the parent can also resolve this minimal ID through its main list/API.
+export function getTournamentForMyMatch(registration) {
+  if (registration?.tournaments?.id) return registration.tournaments;
+  return registration?.tournament_id ? { id: registration.tournament_id } : null;
+}
+
+// Kept separate from the card's markup so the selection behavior can be
+// verified without a browser DOM. The parent resolves a minimal payload by ID
+// when the all-tournaments list does not already contain the full row.
+export function selectMyMatchTournament(registration, onSelect) {
+  const tournament = getTournamentForMyMatch(registration);
+  if (tournament && typeof onSelect === 'function') onSelect(tournament);
+  return tournament;
+}
+
+function TournamentResultsSection({ tournamentId, currentUserId }) {
+  const [resultState, setResultState] = useState(features.tournamentResults ? 'loading' : 'off');
+  const [results, setResults] = useState([]);
+  const [resultMessage, setResultMessage] = useState('');
+
+  const loadResults = async () => {
+    if (!features.tournamentResults) {
+      setResultState('off');
+      return;
+    }
+
+    setResultState('loading');
+    setResultMessage('');
+    const { data, error } = await supabase
+      .from('tournament_results')
+      // This is deliberately a direct, player-safe table read. Do not add
+      // notes, phone data, or profile embeds to this query.
+      .select(PLAYER_TOURNAMENT_RESULT_COLUMNS)
+      .eq('tournament_id', tournamentId)
+      .order('placement', { ascending: true });
+
+    if (error) {
+      console.error('tournament results query failed:', error.message);
+      setResultState('error');
+      setResultMessage('Could not load recorded results right now.');
+      return;
+    }
+
+    setResults(data || []);
+    setResultState('ready');
+  };
+
+  useEffect(() => {
+    loadResults();
+    // `features` is a module-level object. The result view must reload when
+    // its tournament changes, while the feature flag itself remains static.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see note above
+  }, [tournamentId, features.tournamentResults]);
+
+  return (
+    <section aria-label="Tournament results" style={{ background: 'var(--bg-surface)', padding: 'var(--space-5)', borderRadius: 'var(--radius-lg)', marginBottom: 'var(--space-5)', border: '1px solid var(--border-subtle)' }}>
+      <h3 style={{ color: 'var(--accent-text)', marginBottom: 'var(--space-2)', fontSize: 'var(--text-md)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Results</h3>
+      <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-4)', lineHeight: 1.5 }}>
+        Prize amounts are recorded results. Wallet payouts are manual until payments are built.
+      </p>
+
+      {resultState === 'off' && (
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Tournament results are not available on this deployment.</p>
+      )}
+      {resultState === 'loading' && (
+        <div role="status" aria-label="Loading tournament results" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          {[0, 1, 2].map(index => <span key={index} className="skeleton" style={{ display: 'block', height: 34, borderRadius: 'var(--radius-sm)' }} />)}
+        </div>
+      )}
+      {resultState === 'error' && (
+        <ErrorRetry message={resultMessage} onRetry={loadResults} />
+      )}
+      {resultState === 'ready' && results.length === 0 && (
+        <p style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>Results have not been recorded yet.</p>
+      )}
+      {resultState === 'ready' && results.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 440, fontSize: 'var(--text-sm)' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-subtle)' }}>
+                <th scope="col" style={{ padding: '0 8px 8px 0' }}>Place</th>
+                <th scope="col" style={{ padding: '0 8px 8px 0' }}>Player</th>
+                <th scope="col" style={{ padding: '0 8px 8px 0' }}>Kills</th>
+                <th scope="col" style={{ padding: '0 0 8px', textAlign: 'right' }}>Prize</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((result) => {
+                const isCurrentPlayer = Boolean(currentUserId && result.user_id === currentUserId);
+                return (
+                  <tr key={result.user_id} style={{ background: isCurrentPlayer ? 'var(--accent-soft)' : 'transparent', color: 'var(--text-primary)', borderBottom: '1px solid var(--border-subtle)' }}>
+                    <td style={{ padding: '10px 8px 10px 0', fontWeight: 'var(--weight-bold)' }}>#{result.placement}</td>
+                    <td style={{ padding: '10px 8px 10px 0', fontWeight: isCurrentPlayer ? 'var(--weight-extrabold)' : 'var(--weight-medium)' }}>
+                      {result.player_name || (isCurrentPlayer ? 'You' : 'Player')}
+                      {isCurrentPlayer && <span className="visually-hidden"> (your result)</span>}
+                    </td>
+                    <td style={{ padding: '10px 8px 10px 0' }}>{result.kills}</td>
+                    <td style={{ padding: '10px 0', textAlign: 'right', fontWeight: 'var(--weight-semibold)', color: 'var(--gold)' }}>{formatINR(result.prize_amount)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TournamentDetailView({
+  tournament,
+  userProfile,
+  loading = false,
+  loadError = '',
+  onBack,
+  onRetry,
+  onJoinSuccess,
+  onProfileUpdate
+}) {
   const [joining, setJoining] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [alreadyJoined, setAlreadyJoined] = useState(false);
-  const [joinData, setJoinData] = useState({ ff_uid: '', ign: '' });
+  const [joinData, setJoinData] = useState(() => getJoinPrefill(userProfile));
   const [joinFieldErrors, setJoinFieldErrors] = useState({});
   const [joinMessage, setJoinMessage] = useState('');
   const [joinMessageType, setJoinMessageType] = useState('');
+  const [editingGameDetails, setEditingGameDetails] = useState(false);
+  const [saveGameDetails, setSaveGameDetails] = useState(false);
+  const [joinStep, setJoinStep] = useState('game');
+  const [phone, setPhone] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+  const [addingPhone, setAddingPhone] = useState(false);
+
+  const profileFfUid = typeof userProfile?.ff_id === 'string' ? userProfile.ff_id.trim() : '';
+  const profileIgn = typeof userProfile?.nickname === 'string' ? userProfile.nickname.trim() : '';
+  const savedGameDetails = {
+    ff_uid: profileFfUid,
+    ign: profileIgn,
+    hasSavedGameDetails: Boolean(profileFfUid && profileIgn)
+  };
   const isMatchFull = (tournament?.current_players || 0) >= (tournament?.max_players || 0);
+  const needsGameDetailsInputs = editingGameDetails || !savedGameDetails.hasSavedGameDetails;
 
   useEffect(() => {
-    if (!tournament || !userProfile) return;
-    setAlreadyJoined(false);
-    supabase.from('match_registrations').select('id')
-      .eq('tournament_id', tournament.id).eq('user_id', userProfile.id).maybeSingle()
-      .then(({ data }) => { if (data) setAlreadyJoined(true); });
-  }, [tournament, userProfile]);
+    if (!loading && tournament?.id && userProfile?.id) {
+      let cancelled = false;
+      setAlreadyJoined(false);
+      supabase
+        .from('match_registrations')
+        .select('id')
+        .eq('tournament_id', tournament.id)
+        .eq('user_id', userProfile.id)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (!cancelled && data) setAlreadyJoined(true);
+        });
+      return () => { cancelled = true; };
+    }
 
-  // Room credentials via the get_room_details() RPC (flag-gated, default
-  // off). When off, room details keep coming from the tournament row exactly
-  // as before — enabling the flag is coordinated with the DB phase.
+    setAlreadyJoined(false);
+    return undefined;
+  }, [loading, tournament?.id, userProfile?.id]);
+
+  // Keep future joins in sync with Profile screen saves. Do not overwrite a
+  // player while they are actively changing values inside the open modal.
+  useEffect(() => {
+    if (!showJoinModal) {
+      setJoinData({ ff_uid: profileFfUid, ign: profileIgn });
+      setEditingGameDetails(false);
+      setSaveGameDetails(false);
+      setJoinStep('game');
+      setPhone('');
+      setPhoneError('');
+    }
+  }, [showJoinModal, profileFfUid, profileIgn]);
+
+  // Room credentials only arrive through the flag-gated RPC. When the flag is
+  // off, the existing tournament row behavior is retained for deployments
+  // that have not migrated yet.
   const [roomDetails, setRoomDetails] = useState(null);
   useEffect(() => {
-    if (!features.roomDetailsRpc || !alreadyJoined || !tournament?.id) return;
+    setRoomDetails(null);
+    if (loading || !features.roomDetailsRpc || !alreadyJoined || !tournament?.id) return undefined;
+
     let cancelled = false;
     supabase
       .rpc('get_room_details', { p_tournament_id: tournament.id })
@@ -624,14 +982,18 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
           return;
         }
         const row = Array.isArray(data) ? data[0] : data;
-        setRoomDetails({ error: false, roomId: row?.room_id ?? null, roomPassword: row?.room_password ?? null });
+        setRoomDetails({
+          error: false,
+          roomId: row?.room_id ?? null,
+          roomPassword: row?.room_password ?? null
+        });
       });
     return () => { cancelled = true; };
     // features.* lives on a module-level constant object, so the rule calls it
     // an "outer scope value" — but the guard above reads it, and keeping it in
     // the list is what makes the effect re-run if that ever becomes dynamic.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see note above
-  }, [features.roomDetailsRpc, alreadyJoined, tournament?.id]);
+  }, [features.roomDetailsRpc, loading, alreadyJoined, tournament?.id]);
 
   // Client-side mirror of the server's validation (api/_lib/validate.js) —
   // the server remains authoritative; this only gives instant feedback.
@@ -650,29 +1012,91 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
     return Object.keys(errors).length === 0;
   };
 
-  const handleJoin = async (e) => {
-    e && e.preventDefault();
-    if (joining) return;
+  const saveGameDetailsToProfile = async () => {
+    if (!saveGameDetails || !userProfile?.id) return;
+
+    // This browser update is intentionally limited to the game identifiers;
+    // mobile-number ownership is handled by api/profile.js instead.
+    const { error } = await supabase
+      .from('profiles')
+      .update({ ff_id: joinData.ff_uid.trim(), nickname: joinData.ign.trim() })
+      .eq('id', userProfile.id);
+    if (error) throw error;
+    if (onProfileUpdate) await onProfileUpdate();
+  };
+
+  const submitJoin = async () => {
+    if (joining || !tournament) return;
     setJoinMessage('');
     if (!validateJoinForm()) return;
-    if (userProfile.balance < tournament.entry_fee) { setJoinMessage('Insufficient balance for this match. Add money from your wallet.'); setJoinMessageType('error'); return; }
+    if (!userProfile) {
+      setJoinMessage('Your profile is still loading. Please try again in a moment.');
+      setJoinMessageType('error');
+      return;
+    }
+    if (Number(userProfile.balance) < Number(tournament.entry_fee)) {
+      setJoinMessage('Insufficient balance for this match. Add money from your wallet.');
+      setJoinMessageType('error');
+      return;
+    }
+
     setJoining(true);
     try {
-      const { data: existing } = await supabase.from('match_registrations').select('id').eq('tournament_id', tournament.id).eq('user_id', userProfile.id).maybeSingle();
-      if (existing) { setAlreadyJoined(true); setShowJoinModal(false); return; }
+      const { data: existing } = await supabase
+        .from('match_registrations')
+        .select('id')
+        .eq('tournament_id', tournament.id)
+        .eq('user_id', userProfile.id)
+        .maybeSingle();
+      if (existing) {
+        setAlreadyJoined(true);
+        setShowJoinModal(false);
+        return;
+      }
 
-      const { data: latest } = await supabase.from('tournaments').select('current_players, max_players').eq('id', tournament.id).single();
-      if ((latest.current_players || 0) >= latest.max_players) { setJoinMessage('Match is full.'); setJoinMessageType('error'); return; }
+      const { data: latest, error: latestError } = await supabase
+        .from('tournaments')
+        .select('current_players, max_players')
+        .eq('id', tournament.id)
+        .single();
+      if (latestError || !latest) {
+        throw new Error('Could not confirm match availability. Please try again.');
+      }
+      if ((latest.current_players || 0) >= latest.max_players) {
+        setJoinMessage('Match is full.');
+        setJoinMessageType('error');
+        return;
+      }
 
       // Identity (userId) and entry fee are derived server-side from the
       // verified session token and the tournaments table — never sent here.
-      await api.joinTournament({ tournamentId: tournament.id, ff_uid: joinData.ff_uid.trim(), ign: joinData.ign.trim() });
+      await api.joinTournament({
+        tournamentId: tournament.id,
+        ff_uid: joinData.ff_uid.trim(),
+        ign: joinData.ign.trim()
+      });
+
+      let gameDetailsSaveFailed = false;
+      try {
+        await saveGameDetailsToProfile();
+      } catch (saveError) {
+        console.error('game details profile update failed:', saveError?.message || saveError);
+        gameDetailsSaveFailed = true;
+      }
+
       setAlreadyJoined(true);
       setShowJoinModal(false);
-      setJoinMessage('Successfully joined this match.');
+      setJoinMessage(gameDetailsSaveFailed
+        ? 'Successfully joined this match. Your game details could not be saved to your profile.'
+        : 'Successfully joined this match.');
       setJoinMessageType('success');
-      await onJoinSuccess();
+      if (onJoinSuccess) await onJoinSuccess();
     } catch (err) {
+      if (err?.code === 'PHONE_REQUIRED') {
+        setJoinStep('phone');
+        setPhoneError('');
+        return;
+      }
       if (err instanceof ApiError && err.code === '23505') {
         setAlreadyJoined(true);
         setShowJoinModal(false);
@@ -685,23 +1109,104 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
     }
   };
 
-  if (!tournament) return null;
+  const handleJoin = (event) => {
+    event.preventDefault();
+    submitJoin();
+  };
+
+  const handlePhoneSubmit = async (event) => {
+    event.preventDefault();
+    if (addingPhone) return;
+
+    const cleanedPhone = phone.trim();
+    if (!/^[6-9][0-9]{9}$/.test(cleanedPhone)) {
+      setPhoneError('Enter a valid 10-digit Indian mobile number.');
+      return;
+    }
+
+    setAddingPhone(true);
+    setPhoneError('');
+    try {
+      await api.updatePhone({ phone: cleanedPhone });
+      if (onProfileUpdate) await onProfileUpdate();
+      setJoinStep('game');
+      // The blocked join continues immediately after the server accepts the
+      // number, so the player does not have to re-enter game details.
+      await submitJoin();
+    } catch (err) {
+      setPhoneError(err?.message || 'Could not save your mobile number. Please try again.');
+    } finally {
+      setAddingPhone(false);
+    }
+  };
+
+  const openJoinModal = () => {
+    const prefill = getJoinPrefill(userProfile);
+    setJoinData({ ff_uid: prefill.ff_uid, ign: prefill.ign });
+    setJoinFieldErrors({});
+    setJoinMessage('');
+    setEditingGameDetails(!prefill.hasSavedGameDetails);
+    setSaveGameDetails(false);
+    setJoinStep('game');
+    setPhone('');
+    setPhoneError('');
+    setShowJoinModal(true);
+  };
+
+  const copyRoomDetail = async (value, label) => {
+    if (!value) return;
+    try {
+      if (!globalThis.navigator?.clipboard?.writeText) {
+        throw new Error('Clipboard is unavailable');
+      }
+      await globalThis.navigator.clipboard.writeText(String(value));
+      setJoinMessage(`${label} copied.`);
+      setJoinMessageType('success');
+    } catch {
+      setJoinMessage(`Could not copy ${label.toLowerCase()}. Please copy it manually.`);
+      setJoinMessageType('error');
+    }
+  };
+
+  const backButton = (
+    <button type="button" className="back-btn" onClick={onBack}>
+      <ArrowLeft size={16} aria-hidden="true" style={{ verticalAlign: -2 }} /> Back
+    </button>
+  );
+
+  if (loading) {
+    return (
+      <div className="view detail-view">
+        {backButton}
+        <div role="status" style={{ padding: 'var(--space-8)', textAlign: 'center', color: 'var(--text-muted)' }}>
+          <Loader size={24} className="spin" aria-hidden="true" /> Loading match details…
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError || !tournament?.id) {
+    return (
+      <div className="view detail-view">
+        {backButton}
+        <ErrorRetry
+          message={loadError || 'This match is unavailable.'}
+          onRetry={onRetry || onBack}
+        />
+      </div>
+    );
+  }
 
   const roomDisplay = features.roomDetailsRpc
-    ? {
-        id: roomDetails?.error ? 'Unavailable' : (roomDetails?.roomId || 'Wait...'),
-        password: roomDetails?.error ? 'Unavailable' : (roomDetails?.roomPassword || 'Wait...')
-      }
-    : {
-        id: tournament.room_id || 'Wait...',
-        password: tournament.room_password || 'Wait...'
-      };
+    ? { id: roomDetails?.roomId || '', password: roomDetails?.roomPassword || '' }
+    : { id: tournament.room_id || '', password: tournament.room_password || '' };
+  const hasRoomId = Boolean(roomDisplay.id);
+  const hasRoomPassword = Boolean(roomDisplay.password);
+  const hasAnyRoomCredential = hasRoomId || hasRoomPassword;
 
   return (
     <div className="view detail-view">
-      <button type="button" className="back-btn" onClick={() => setView('home')}>
-        <ArrowLeft size={16} aria-hidden="true" style={{ verticalAlign: -2 }} /> Back
-      </button>
+      {backButton}
 
       <div className="detail-hero" style={{ backgroundImage: `url(${tournament.image_url || 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=1200&q=70&auto=format&fit=crop'})` }}>
         <div className="detail-hero-overlay">
@@ -726,8 +1231,9 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
         <section className="info-grid" aria-label="Match details">
           <div className="info-item"><span className="label">Entry Fee</span><span className="value">{formatINR(tournament.entry_fee)}</span></div>
           <div className="info-item"><span className="label">Mode</span><span className="value">{tournament.mode}</span></div>
-          <div className="info-item"><span className="label">Players</span><span className="value">{tournament.current_players || 0}/{tournament.max_players}</span></div>
-          <div className="info-item"><span className="label">Time</span><span className="value">{formatDateTime(tournament.match_time)}</span></div>
+          <div className="info-item"><span className="label">Slots</span><span className="value">{tournament.current_players || 0}/{tournament.max_players}</span></div>
+          <div className="info-item"><span className="label">Match time</span><span className="value">{formatDateTime(tournament.match_time)}</span></div>
+          <div className="info-item"><span className="label">Status</span><span className="value" style={{ textTransform: 'capitalize' }}>{tournament.status || 'Unknown'}</span></div>
         </section>
 
         <section aria-label="Rules" style={{ background: 'var(--bg-surface)', padding: 'var(--space-5)', borderRadius: 'var(--radius-lg)', marginBottom: 'var(--space-5)', border: '1px solid var(--border-subtle)' }}>
@@ -735,74 +1241,164 @@ function TournamentDetailView({ tournament, userProfile, setView, onJoinSuccess 
           <p style={{ whiteSpace: 'pre-line', fontSize: 'var(--text-md)', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{tournament.rules || 'No rules specified.'}</p>
         </section>
 
+        {tournament.status === 'completed' && (
+          <TournamentResultsSection tournamentId={tournament.id} currentUserId={userProfile?.id} />
+        )}
+
         {!alreadyJoined ? (
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => { setJoinFieldErrors({}); setShowJoinModal(true); }}
-            disabled={joining || isMatchFull}
+            onClick={openJoinModal}
+            disabled={joining || isMatchFull || !userProfile}
           >
             <Trophy size={20} aria-hidden="true" />
             {isMatchFull ? 'Match Full' : `Join Tournament (${formatINR(tournament.entry_fee)})`}
           </button>
         ) : (
-          <div style={{ background: 'var(--success-soft)', border: '1px solid var(--success-border)', padding: 'var(--space-5)', borderRadius: 'var(--radius-lg)' }}>
+          <section style={{ background: 'var(--success-soft)', border: '1px solid var(--success-border)', padding: 'var(--space-5)', borderRadius: 'var(--radius-lg)' }} aria-label="Registration and room details">
             <h3 style={{ color: 'var(--success-text)', marginBottom: 'var(--space-4)', textAlign: 'center' }}>Registered!</h3>
-            <div className="info-grid" style={{ marginBottom: 'var(--space-4)' }}>
-              <div className="info-item"><span className="label">Room ID</span><span className="value">{roomDisplay.id}</span></div>
-              <div className="info-item"><span className="label">Password</span><span className="value">{roomDisplay.password}</span></div>
-            </div>
-            <p style={{ textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>Room details are shared around match time.</p>
-          </div>
+            {!hasAnyRoomCredential ? (
+              <p style={{ textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>Room will be shared soon</p>
+            ) : (
+              <>
+                <div className="info-grid" style={{ marginBottom: hasRoomId && hasRoomPassword ? 0 : 'var(--space-3)' }}>
+                  <div className="info-item">
+                    <span className="label">Room ID</span>
+                    <span className="value">{hasRoomId ? roomDisplay.id : 'Not set'}</span>
+                    {hasRoomId && (
+                      <button type="button" className="btn btn-outline btn--sm" onClick={() => copyRoomDetail(roomDisplay.id, 'Room ID')}>
+                        <Copy size={14} aria-hidden="true" /> Copy Room ID
+                      </button>
+                    )}
+                  </div>
+                  <div className="info-item">
+                    <span className="label">Password</span>
+                    <span className="value">{hasRoomPassword ? roomDisplay.password : 'Not set'}</span>
+                    {hasRoomPassword && (
+                      <button type="button" className="btn btn-outline btn--sm" onClick={() => copyRoomDetail(roomDisplay.password, 'Password')}>
+                        <Copy size={14} aria-hidden="true" /> Copy Password
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {(!hasRoomId || !hasRoomPassword) && (
+                  <p style={{ textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginTop: 'var(--space-3)' }}>Room will be shared soon</p>
+                )}
+              </>
+            )}
+          </section>
         )}
       </div>
 
-      <Modal open={showJoinModal} onClose={() => setShowJoinModal(false)} title="Enter game details" labelledBy="join-modal-title">
-        <form onSubmit={handleJoin} noValidate>
-          <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-md)', marginBottom: 'var(--space-4)', textAlign: 'center' }}>
-            Entry fee {formatINR(tournament.entry_fee)} will be deducted from your wallet balance.
-          </p>
-          <div className="field">
-            <label className="field-label" htmlFor="join-ff-uid">Free Fire UID</label>
-            <input
-              id="join-ff-uid"
-              className="input"
-              inputMode="numeric"
-              autoComplete="off"
-              placeholder="e.g. 123456789"
-              value={joinData.ff_uid}
-              onChange={e => setJoinData({ ...joinData, ff_uid: e.target.value })}
-              aria-invalid={!!joinFieldErrors.ff_uid}
-              aria-describedby={joinFieldErrors.ff_uid ? 'join-ff-uid-error' : undefined}
-            />
-            {joinFieldErrors.ff_uid && (
-              <p className="field-error" id="join-ff-uid-error"><AlertCircle size={13} aria-hidden="true" /> {joinFieldErrors.ff_uid}</p>
+      <Modal
+        open={showJoinModal}
+        onClose={() => !joining && !addingPhone && setShowJoinModal(false)}
+        title={joinStep === 'phone' ? 'Add mobile number' : 'Enter game details'}
+        labelledBy="join-modal-title"
+      >
+        {joinStep === 'phone' ? (
+          <form onSubmit={handlePhoneSubmit} noValidate>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-md)', marginBottom: 'var(--space-4)', textAlign: 'center' }}>
+              Add your mobile number to join this match. It is verified on the server and is not shown to other players.
+            </p>
+            <div className="field">
+              <label className="field-label" htmlFor="join-phone">Mobile number</label>
+              <input
+                id="join-phone"
+                className="input"
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel"
+                placeholder="10-digit Indian mobile number"
+                value={phone}
+                onChange={event => { setPhone(event.target.value); setPhoneError(''); }}
+                aria-invalid={!!phoneError}
+                aria-describedby={phoneError ? 'join-phone-error' : undefined}
+              />
+              {phoneError && (
+                <p className="field-error" id="join-phone-error" role="alert"><AlertCircle size={13} aria-hidden="true" /> {phoneError}</p>
+              )}
+            </div>
+            <div className="modal-actions">
+              <button type="submit" className="btn btn-primary" disabled={addingPhone}>
+                {addingPhone ? <Loader size={18} className="spin" aria-hidden="true" /> : <Phone size={18} aria-hidden="true" />}
+                {addingPhone ? 'Saving…' : 'Save and join'}
+              </button>
+              <button type="button" className="btn btn-outline" onClick={() => setShowJoinModal(false)} disabled={addingPhone}>Cancel</button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handleJoin} noValidate>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-md)', marginBottom: 'var(--space-4)', textAlign: 'center' }}>
+              Entry fee {formatINR(tournament.entry_fee)} will be deducted from your wallet balance.
+            </p>
+
+            {!needsGameDetailsInputs ? (
+              <section aria-label="Saved game details" style={{ background: 'var(--bg-inset)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 'var(--space-3)' }}>
+                  <div>
+                    <strong style={{ display: 'block', marginBottom: 4 }}>Free Fire UID: {joinData.ff_uid}</strong>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>In-game name: {joinData.ign}</span>
+                  </div>
+                  <button type="button" className="btn btn-outline btn--sm" onClick={() => setEditingGameDetails(true)}>Change</button>
+                </div>
+              </section>
+            ) : (
+              <>
+                <div className="field">
+                  <label className="field-label" htmlFor="join-ff-uid">Free Fire UID</label>
+                  <input
+                    id="join-ff-uid"
+                    className="input"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder="e.g. 123456789"
+                    value={joinData.ff_uid}
+                    onChange={event => setJoinData({ ...joinData, ff_uid: event.target.value })}
+                    aria-invalid={!!joinFieldErrors.ff_uid}
+                    aria-describedby={joinFieldErrors.ff_uid ? 'join-ff-uid-error' : undefined}
+                  />
+                  {joinFieldErrors.ff_uid && (
+                    <p className="field-error" id="join-ff-uid-error"><AlertCircle size={13} aria-hidden="true" /> {joinFieldErrors.ff_uid}</p>
+                  )}
+                </div>
+                <div className="field">
+                  <label className="field-label" htmlFor="join-ign">In-game name</label>
+                  <input
+                    id="join-ign"
+                    className="input"
+                    autoComplete="off"
+                    placeholder="e.g. ShadowSlayer"
+                    value={joinData.ign}
+                    onChange={event => setJoinData({ ...joinData, ign: event.target.value })}
+                    aria-invalid={!!joinFieldErrors.ign}
+                    aria-describedby={joinFieldErrors.ign ? 'join-ign-error' : undefined}
+                  />
+                  {joinFieldErrors.ign && (
+                    <p className="field-error" id="join-ign-error"><AlertCircle size={13} aria-hidden="true" /> {joinFieldErrors.ign}</p>
+                  )}
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginTop: 'var(--space-2)', color: 'var(--text-secondary)', fontSize: 'var(--text-sm)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={saveGameDetails}
+                    onChange={event => setSaveGameDetails(event.target.checked)}
+                    style={{ accentColor: 'var(--accent)' }}
+                  />
+                  Save to my profile
+                </label>
+              </>
             )}
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor="join-ign">In-game name</label>
-            <input
-              id="join-ign"
-              className="input"
-              autoComplete="off"
-              placeholder="e.g. ShadowSlayer"
-              value={joinData.ign}
-              onChange={e => setJoinData({ ...joinData, ign: e.target.value })}
-              aria-invalid={!!joinFieldErrors.ign}
-              aria-describedby={joinFieldErrors.ign ? 'join-ign-error' : undefined}
-            />
-            {joinFieldErrors.ign && (
-              <p className="field-error" id="join-ign-error"><AlertCircle size={13} aria-hidden="true" /> {joinFieldErrors.ign}</p>
-            )}
-          </div>
-          <div className="modal-actions">
-            <button type="submit" className="btn btn-primary" disabled={joining}>
-              {joining ? <Loader size={18} className="spin" aria-hidden="true" /> : <Trophy size={18} aria-hidden="true" />}
-              {joining ? 'Joining…' : 'Confirm Join'}
-            </button>
-            <button type="button" className="btn btn-outline" onClick={() => setShowJoinModal(false)}>Cancel</button>
-          </div>
-        </form>
+            <div className="modal-actions">
+              <button type="submit" className="btn btn-primary" disabled={joining}>
+                {joining ? <Loader size={18} className="spin" aria-hidden="true" /> : <Trophy size={18} aria-hidden="true" />}
+                {joining ? 'Joining…' : 'Confirm Join'}
+              </button>
+              <button type="button" className="btn btn-outline" onClick={() => setShowJoinModal(false)} disabled={joining}>Cancel</button>
+            </div>
+          </form>
+        )}
       </Modal>
     </div>
   );
@@ -1523,7 +2119,7 @@ function DesktopNav({ currentView, setView, isAdmin }) {
     </aside>
   );
 }
-function MyMatchesView({ userId, setView }) {
+function MyMatchesView({ userId, setView, onTournamentSelect }) {
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -1547,9 +2143,13 @@ function MyMatchesView({ userId, setView }) {
           name,
           prize,
           entry_fee,
+          mode,
+          current_players,
+          max_players,
           match_time,
           status,
-          image_url
+          image_url,
+          rules
         )
       `)
       .eq('user_id', userId);
@@ -1592,7 +2192,7 @@ function MyMatchesView({ userId, setView }) {
       ) : (
         <motion.ul className="card-grid" variants={staggerContainer} initial="initial" animate="animate">
           {matches.map(m => (
-            <MyMatchCard key={m.id} registration={m} />
+            <MyMatchCard key={m.id} registration={m} onSelect={onTournamentSelect} />
           ))}
         </motion.ul>
       )}
@@ -1600,15 +2200,22 @@ function MyMatchesView({ userId, setView }) {
   );
 }
 
-function MyMatchCard({ registration }) {
+export function MyMatchCard({ registration, onSelect }) {
   const [imgError, setImgError] = useState(false);
-  const t = registration.tournaments;
+  const t = getTournamentForMyMatch(registration);
   const current = Number(t?.current_players) || 0;
   const max = Number(t?.max_players) || 0;
+  const matchName = t?.name || 'Unknown match';
 
   return (
     <li>
-      <article className="t-card" style={{ cursor: 'default' }}>
+      <button
+        type="button"
+        className="t-card"
+        style={{ padding: 0 }}
+        onClick={() => selectMyMatchTournament(registration, onSelect)}
+        aria-label={`Open details for ${matchName}`}
+      >
         <span className="t-card-media">
           {!imgError && t?.image_url && (
             <img src={t.image_url} alt="" loading="lazy" decoding="async" onError={() => setImgError(true)} />
@@ -1617,7 +2224,7 @@ function MyMatchCard({ registration }) {
         </span>
         <span className="t-card-body">
           <span className="t-card-title-row">
-            <span className="t-card-title">{t?.name || 'Unknown match'}</span>
+            <span className="t-card-title">{matchName}</span>
             <span className="prize-tag">{formatINR(t?.prize)}</span>
           </span>
           <span className="t-card-meta">
@@ -1628,7 +2235,7 @@ function MyMatchCard({ registration }) {
             )}
           </span>
         </span>
-      </article>
+      </button>
     </li>
   );
 }

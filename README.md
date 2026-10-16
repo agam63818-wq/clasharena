@@ -74,6 +74,7 @@ secret here.**
 | `VITE_FEATURE_WALLET_TRANSACTIONS` | Wallet history flag |
 | `VITE_FEATURE_WALLET_REQUESTS` | Deposit/withdraw request UI |
 | `VITE_FEATURE_ROOM_RPC` | Room credentials via RPC |
+| `VITE_FEATURE_TOURNAMENT_RESULTS` | Player-facing tournament standings UI |
 | `VITE_SUPPORT_WHATSAPP` | Support contact, display only |
 | `VITE_SUPPORT_UPI` | Support contact, **display only** |
 
@@ -87,6 +88,7 @@ secret here.**
 | `ENABLE_WALLET_REQUESTS` | Wallet-request kill switch |
 | `WALLET_REQUESTS_PER_HOUR` | Per-user hourly cap (default 5) |
 | `ENABLE_TOURNAMENT_CANCELLATION` | Cancellation-with-refunds switch |
+| `ENABLE_TOURNAMENT_RESULTS` | Tournament-results RPC switch (default on; set `false` to disable) |
 
 ## 6. Feature flags (permanent rule 7)
 
@@ -102,6 +104,8 @@ otherwise the feature degrades gracefully with an honest message.
 | `ENABLE_WALLET_REQUESTS` | server — `api/wallet.js`, `api/admin.js` | Kill switch for the whole wallet-request flow | Same objects as above. While off, every wallet action answers 503 and **no money can move** | **`false`** |
 | `JOIN_USE_RPC` | server — `api/joinTournament.js` | Atomic join via `join_tournament(p_user_id, …)` (EXECUTE to `service_role` only) | `003_functions_triggers.sql` §2. **Not applied.** | **`false`** — non-atomic legacy path |
 | `VITE_FEATURE_ROOM_RPC` | client — `features.roomDetailsRpc` | Room ID/password via `get_room_details()` (`auth.uid()`-based, `authenticated`) | `003_functions_triggers.sql` §3, optionally `004_room_credentials_split.sql`. **Not applied.** | **`false`** |
+| `VITE_FEATURE_TOURNAMENT_RESULTS` | client — `features.tournamentResults` | Player-facing completed-match standings from `tournament_results` | Deployed `tournament_results` table + player-safe read policy | **`true`** — set `false` to show an honest unavailable state |
+| `ENABLE_TOURNAMENT_RESULTS` | server — `api/admin.js` (`get/setTournamentResults`) | Admin result editing via `admin_set_tournament_results()` | Deployed `admin_set_tournament_results(p_tournament_id, p_admin_id, p_results)` service-role RPC | **`true`** — set `false` to return 503 without changing results/status |
 | `ENABLE_TOURNAMENT_CANCELLATION` | server — `api/admin.js` (`cancelTournament`) | Cancelling a tournament that has **paid** registrations, with refunds | `cancel_tournament_with_refund()` — atomic, idempotent, `service_role` only (`006_cancel_tournament_refunds.sql`). **Not applied.** A tournament with no paid registrations cancels without this flag | **`false`** — 409 with the exact reason |
 
 ## 7. Architecture
@@ -120,7 +124,7 @@ src/
   lib/format.js            Date/currency/number display formatting
   lib/tournamentStatus.js  Display-status derivation
   components/              Avatar, Modal, EmptyState, ErrorRetry, Skeletons, StatusBadge, TournamentCard
-  pages/AdminView.jsx      Lazy-loaded admin dashboard (create/edit/cancel, registrations, wallet queue)
+  pages/AdminView.jsx      Lazy-loaded admin dashboard (create/edit/cancel, registrations, results, wallet queue)
   pages/Terms.jsx          Placeholder policy text — needs owner/legal review
 api/                       Vercel serverless functions (4 = well under Hobby's 12 limit)
   _lib/auth.js             requireUser / requireAdmin (identity from the Bearer token, role from the DB)
@@ -131,7 +135,7 @@ api/                       Vercel serverless functions (4 = well under Hobby's 1
   _lib/audit.js            Best-effort admin audit log writer
   joinTournament.js        Join (RPC path or legacy path)
   wallet.js                User-side wallet request router
-  admin.js                 Admin router: tournaments, registrations, wallet review, cancel
+  admin.js                 Admin router: tournaments, registrations, results, wallet review, cancel
   deleteTournament.js      Hard delete (kept; the UI now cancels instead)
 supabase/proposed/         Proposed SQL, NOT APPLIED: 001..007
 tests/                     Vitest suites (API routes, wallet, admin, client helpers) — Supabase mocked
@@ -198,9 +202,11 @@ in the shipped bundle.
 
 ## Honest limits
 
-- The database phase is **not applied**: RLS, constraints, the atomic join
-  function, room-credential protection and the wallet/cancel RPCs are proposed
-  SQL only.
+- Most of the database phase is **not applied**: RLS, constraints, the atomic
+  join function, room-credential protection and the wallet/cancel RPCs are
+  proposed SQL only. The deployed exception is tournament results
+  (`tournament_results` and `admin_set_tournament_results()`), which powers
+  completed-match standings.
 - Joins on the legacy path are **not atomic** (documented; mitigated by an
   optimistic lock + compensating refund, not eliminated).
 - There is **no payment gateway**; wallet requests are a manual,

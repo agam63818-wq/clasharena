@@ -8,7 +8,11 @@
 //   POST /api/admin
 //   body: { action: 'createTournament',     tournament: {...} }
 //         { action: 'updateTournament',     tournament: { id, ...fields } }
+//         { action: 'getTournament',        tournamentId }
+//         { action: 'deleteTournament',     tournamentId }
 //         { action: 'listRegistrations' }
+//         { action: 'getTournamentResults', tournamentId }
+//         { action: 'setTournamentResults', tournamentId, results: [...] }
 //         { action: 'cancelTournament',     tournamentId, reason? }
 //         { action: 'listWalletRequests' }
 //         { action: 'approveWalletRequest', requestId, note? }
@@ -43,13 +47,16 @@
 // "action done, audit note not stored" instead of inventing one.
 //
 // Response shapes (kept in the shape the client already consumes):
-//   success: { success: true, tournament }                        (create/update/cancel)
-//            { success: true, registrations: [] }                 (listRegistrations)
-//            { success: true, requests: [] }                       (listWalletRequests)
-//            { success: true, walletRequest: {...}, auditLogged }  (approve/reject)
+//   success: { success: true, tournament }                         (create/update/cancel/get)
+//            { success: true, tournamentId, auditLogged }          (delete)
+//            { success: true, registrations: [] }                  (listRegistrations)
+//            { success: true, results: [] }                        (getTournamentResults)
+//            { success: true, tournament, resultCount, auditLogged } (setTournamentResults)
+//            { success: true, requests: [] }                        (listWalletRequests)
+//            { success: true, walletRequest: {...}, auditLogged }   (approve/reject)
 //   failure: { error: string } — safe messages only, never raw DB errors.
-// `api/deleteTournament.js` is unchanged and still owns deletion (the UI no
-// longer calls it; tournaments are cancelled, not deleted).
+// The older api/deleteTournament.js endpoint remains for backward
+// compatibility; the admin UI uses this central requireAdmin-protected route.
 
 import { requireAdmin } from './_lib/auth.js';
 import { HttpError, sendError } from './_lib/errors.js';
@@ -67,7 +74,15 @@ import {
 const REGISTRATION_LIMIT = 500;
 // Bound the pending wallet-request queue an admin screen loads at once.
 const WALLET_QUEUE_LIMIT = 200;
+// A tournament's own max_players is capped at 10,000 by the admin validator,
+// so this bound covers every legitimate result row without an unbounded read.
+const RESULT_REGISTRATION_LIMIT = 10000;
 const MAX_ADMIN_NOTE_LENGTH = 300;
+const RESULT_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_RESULT_PRIZE_AMOUNT = 10000000;
+// Only the admin route may retrieve room credentials. Keep this explicit so a
+// future player-facing query cannot accidentally inherit these private fields.
+const ADMIN_TOURNAMENT_COLUMNS = 'id, name, mode, prize, entry_fee, max_players, current_players, status, match_time, room_id, room_password, image_url, rules, created_at';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -86,8 +101,16 @@ export default async function handler(req, res) {
         return await createTournament(res, supabase, admin, body.tournament);
       case 'updateTournament':
         return await updateTournament(res, supabase, admin, body.tournament);
+      case 'getTournament':
+        return await getTournament(res, supabase, body);
+      case 'deleteTournament':
+        return await deleteTournament(res, supabase, admin, body);
       case 'listRegistrations':
         return await listRegistrations(res, supabase);
+      case 'getTournamentResults':
+        return await getTournamentResults(res, supabase, body);
+      case 'setTournamentResults':
+        return await setTournamentResults(res, supabase, admin, body);
       case 'cancelTournament':
         return await cancelTournament(res, supabase, admin, body);
       case 'listWalletRequests':
@@ -180,10 +203,79 @@ async function updateTournament(res, supabase, admin, input) {
   return res.status(200).json({ success: true, tournament: data, auditLogged });
 }
 
+// Fetch the full row for the edit form. The tournament list deliberately
+// omits room credentials when VITE_FEATURE_ROOM_RPC is enabled, so an admin
+// must load this server-authorized view before submitting an edit.
+async function getTournament(res, supabase, input) {
+  const tournamentId = validateTournamentId(input.tournamentId);
+  const { data, error } = await supabase
+    .from('tournaments')
+    .select(ADMIN_TOURNAMENT_COLUMNS)
+    .eq('id', tournamentId)
+    .single();
+
+  if (error || !data) {
+    throw new HttpError(404, 'Tournament not found.');
+  }
+
+  return res.status(200).json({ success: true, tournament: data });
+}
+
+// Hard deletion is only safe for an empty tournament. A tournament with any
+// registrations must take the explicit cancellation path instead, because it
+// may need the server-side refund transaction.
+async function deleteTournament(res, supabase, admin, input) {
+  const tournamentId = validateTournamentId(input.tournamentId);
+  const { count, error: countError } = await supabase
+    .from('match_registrations')
+    .select('id', { count: 'exact', head: true })
+    .eq('tournament_id', tournamentId);
+
+  if (countError) {
+    console.error('admin: registration count failed before delete:', countError.message);
+    throw new HttpError(500, 'Could not delete the tournament right now.');
+  }
+
+  const registrations = Number(count) || 0;
+  if (registrations > 0) {
+    throw new HttpError(
+      409,
+      `This tournament has ${registrations} registered player(s) and cannot be deleted. Cancel it instead so player refunds can be handled safely.`
+    );
+  }
+
+  const { data, error } = await supabase
+    .from('tournaments')
+    .delete()
+    .eq('id', tournamentId)
+    .select('id, name')
+    .maybeSingle();
+
+  if (error) {
+    console.error('admin: tournament delete failed:', error.message);
+    throw new HttpError(500, 'Could not delete the tournament right now.');
+  }
+  if (!data) {
+    throw new HttpError(404, 'Tournament not found.');
+  }
+
+  const auditLogged = await recordAdminAction(supabase, {
+    adminId: admin.id,
+    action: 'deleteTournament',
+    targetType: 'tournament',
+    targetId: tournamentId,
+    details: { name: data.name || null, registrations: 0 }
+  });
+
+  return res.status(200).json({ success: true, tournamentId, auditLogged });
+}
+
 async function listRegistrations(res, supabase) {
+  // Phone numbers are intentionally selected only here, after requireAdmin()
+  // has succeeded. No player-facing query includes another player's phone.
   const { data, error } = await supabase
     .from('match_registrations')
-    .select('id, tournament_id, ff_uid, ign, created_at, profiles(username)')
+    .select('id, tournament_id, user_id, ff_uid, ign, created_at, profiles(username, phone)')
     .order('created_at', { ascending: false })
     .limit(REGISTRATION_LIMIT);
 
@@ -193,6 +285,108 @@ async function listRegistrations(res, supabase) {
   }
 
   return res.status(200).json({ success: true, registrations: data || [] });
+}
+
+// ---------------------------------------------------------------------------
+// getTournamentResults — admin-only editing data, including the private note.
+// Player-facing result reads deliberately select no note (see src/App.jsx).
+// ---------------------------------------------------------------------------
+async function getTournamentResults(res, supabase, input) {
+  assertTournamentResultsEnabled();
+
+  const tournamentId = validateTournamentId(input.tournamentId);
+  const { data, error } = await supabase
+    .from('tournament_results')
+    .select('user_id, placement, kills, prize_amount, note')
+    .eq('tournament_id', tournamentId)
+    .order('placement', { ascending: true })
+    .limit(RESULT_REGISTRATION_LIMIT);
+
+  if (error) {
+    if (isMissingDbObjectError(error)) {
+      throw missingSetupHttpError('the tournament_results table');
+    }
+    console.error('admin: tournament results read failed:', error.message);
+    throw new HttpError(500, 'Could not load tournament results.');
+  }
+
+  return res.status(200).json({ success: true, results: data || [] });
+}
+
+// ---------------------------------------------------------------------------
+// setTournamentResults
+//
+// The database RPC is the only writer: it replaces a tournament's saved
+// results and marks that tournament completed in one server-authorized
+// operation. The browser can suggest placements and recorded prizes, but it
+// cannot choose a user outside the tournament's registrations or write a
+// balance/payout itself.
+// ---------------------------------------------------------------------------
+async function setTournamentResults(res, supabase, admin, input) {
+  assertTournamentResultsEnabled();
+
+  const tournamentId = validateTournamentId(input.tournamentId);
+  const results = validateResults(input.results);
+
+  // Never rely on the browser's player list. Every submitted user must exist
+  // in this tournament's registrations as read by the service-role client.
+  const { data: registrations, error: registrationsError } = await supabase
+    .from('match_registrations')
+    .select('user_id')
+    .eq('tournament_id', tournamentId)
+    .limit(RESULT_REGISTRATION_LIMIT);
+
+  if (registrationsError) {
+    if (isMissingDbObjectError(registrationsError)) {
+      throw missingSetupHttpError('the match_registrations table');
+    }
+    console.error('admin: result registration validation failed:', registrationsError.message);
+    throw new HttpError(500, 'Could not validate tournament players right now.');
+  }
+
+  const registeredUserIds = new Set((registrations || []).map(row => row.user_id).filter(Boolean));
+  if (results.some(result => !registeredUserIds.has(result.user_id))) {
+    throw new HttpError(400, 'Every result must belong to a player registered for this tournament.');
+  }
+
+  const { data, error: rpcError } = await supabase.rpc('admin_set_tournament_results', {
+    p_tournament_id: tournamentId,
+    p_admin_id: admin.id,
+    p_results: results
+  });
+
+  if (rpcError) {
+    if (isMissingDbObjectError(rpcError)) {
+      throw missingSetupHttpError('the admin_set_tournament_results() function');
+    }
+    console.error('admin: set tournament results rpc failed:', rpcError.message);
+    throw new HttpError(500, 'Could not save tournament results right now.');
+  }
+
+  if (!(data && data.success)) {
+    const verdict = safeTournamentResultsVerdict(data && data.error);
+    return res.status(verdict.status).json({ error: verdict.message });
+  }
+
+  const auditLogged = await recordAdminAction(supabase, {
+    adminId: admin.id,
+    action: 'setTournamentResults',
+    targetType: 'tournament',
+    targetId: tournamentId,
+    // Keep the audit useful without copying player IDs or private notes into
+    // a generic event payload.
+    details: {
+      result_count: results.length,
+      recorded_prize_total: results.reduce((total, result) => total + result.prize_amount, 0)
+    }
+  });
+
+  return res.status(200).json({
+    success: true,
+    tournament: { id: tournamentId, status: 'completed' },
+    resultCount: results.length,
+    auditLogged
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +608,95 @@ async function reviewWalletRequest(res, supabase, admin, body, decision) {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+function assertTournamentResultsEnabled() {
+  // Results are deployed with this task. Operators can still explicitly turn
+  // the feature off while diagnosing a database deployment; the route then
+  // says so honestly instead of attempting a partial write.
+  if (process.env.ENABLE_TOURNAMENT_RESULTS === 'false') {
+    throw new HttpError(
+      503,
+      'Tournament results are not enabled on this server yet. This feature is unavailable and no result or tournament status changes were made.'
+    );
+  }
+}
+
+function validateResults(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new HttpError(400, 'Enter at least one tournament result.');
+  }
+  if (value.length > RESULT_REGISTRATION_LIMIT) {
+    throw new HttpError(400, 'Too many tournament results were supplied.');
+  }
+
+  const seenUsers = new Set();
+  return value.map((row, index) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      throw new HttpError(400, `Result ${index + 1} is invalid.`);
+    }
+
+    const userId = typeof row.user_id === 'string' ? row.user_id : '';
+    if (!RESULT_UUID_RE.test(userId)) {
+      throw new HttpError(400, `Result ${index + 1} has an invalid player.`);
+    }
+    if (seenUsers.has(userId)) {
+      throw new HttpError(400, 'A player can only have one result.');
+    }
+    seenUsers.add(userId);
+
+    const placement = toResultInteger(row.placement, 'Placement', 1);
+    const kills = toResultInteger(row.kills, 'Kills', 0);
+    const prizeAmount = toResultMoney(row.prize_amount);
+    const note = validateAdminNote(row.note);
+
+    return {
+      user_id: userId,
+      placement,
+      kills,
+      prize_amount: prizeAmount,
+      note
+    };
+  });
+}
+
+function toResultInteger(value, field, minimum) {
+  const number = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isSafeInteger(number) || number < minimum) {
+    throw new HttpError(400, `${field} must be a whole number of at least ${minimum}.`);
+  }
+  return number;
+}
+
+function toResultMoney(value) {
+  const number = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isFinite(number) || number < 0 || number > MAX_RESULT_PRIZE_AMOUNT) {
+    throw new HttpError(400, `Prize amount must be a number between 0 and ${MAX_RESULT_PRIZE_AMOUNT}.`);
+  }
+  return Math.round(number * 100) / 100;
+}
+
+function safeTournamentResultsVerdict(value) {
+  switch (value) {
+    case 'Tournament not found':
+      return { status: 404, message: 'Tournament not found.' };
+    case 'Tournament has no registrations':
+    case 'No registrations found':
+      return { status: 409, message: 'This tournament has no registered players to score.' };
+    case 'Player not registered for tournament':
+    case 'Result player is not registered for this tournament':
+      return { status: 400, message: 'Every result must belong to a player registered for this tournament.' };
+    case 'Invalid results':
+    case 'Invalid result data':
+      return { status: 400, message: 'One or more tournament results are invalid.' };
+    case 'Tournament is cancelled':
+    case 'This match has been cancelled':
+      return { status: 409, message: 'Cancelled tournaments cannot receive results.' };
+    case 'Tournament results are locked':
+      return { status: 409, message: 'Tournament results are locked and cannot be changed.' };
+    default:
+      return { status: 500, message: 'Could not save tournament results right now.' };
+  }
+}
+
 function assertWalletRequestsEnabled() {
   if (process.env.ENABLE_WALLET_REQUESTS !== 'true') {
     throw new HttpError(

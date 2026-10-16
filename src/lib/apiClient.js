@@ -63,8 +63,13 @@ export const api = {
   joinTournament: ({ tournamentId, ff_uid, ign }) =>
     request('/api/joinTournament', { body: { tournamentId, ff_uid, ign } }),
 
-  // Still available for the untouched api/deleteTournament.js route, but the
-  // admin UI no longer deletes tournaments — it cancels them (see below).
+  // Phone numbers are updated through the authenticated server route rather
+  // than a browser database write. The server validates ownership and format.
+  updatePhone: ({ phone }) =>
+    request('/api/profile', { body: { action: 'updatePhone', phone } }),
+
+  // Legacy endpoint retained for existing callers. The admin UI uses the
+  // requireAdmin-protected adminDeleteTournament action below instead.
   deleteTournament: ({ tournamentId }) =>
     request('/api/deleteTournament', { body: { tournamentId } }),
 
@@ -79,8 +84,22 @@ export const api = {
   adminUpdateTournament: (tournament) =>
     request('/api/admin', { body: { action: 'updateTournament', tournament } }),
 
+  adminGetTournament: ({ tournamentId }) =>
+    request('/api/admin', { body: { action: 'getTournament', tournamentId } }),
+
+  adminDeleteTournament: ({ tournamentId }) =>
+    request('/api/admin', { body: { action: 'deleteTournament', tournamentId } }),
+
   adminListRegistrations: () =>
     request('/api/admin', { body: { action: 'listRegistrations' } }),
+
+  adminGetTournamentResults: ({ tournamentId }) =>
+    request('/api/admin', { body: { action: 'getTournamentResults', tournamentId } }),
+
+  // Results are recorded by the service-role RPC. This is not a wallet payout:
+  // it only saves standings and the recorded prize amount for each player.
+  adminSetTournamentResults: ({ tournamentId, results }) =>
+    request('/api/admin', { body: { action: 'setTournamentResults', tournamentId, results } }),
 
   // Cancel (not delete): the server decides whether the tournament can simply
   // be closed or needs the atomic refund RPC, and answers 409/503 with the

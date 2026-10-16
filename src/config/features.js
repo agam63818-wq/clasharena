@@ -5,8 +5,9 @@
 //
 // Safe defaults: a flag is only ON when its backend demonstrably exists.
 // Server-side counterparts are env vars on the API routes (JOIN_USE_RPC,
-// ENABLE_WALLET_REQUESTS, ENABLE_TOURNAMENT_CANCELLATION) — see
-// api/joinTournament.js, api/wallet.js, api/admin.js.
+// ENABLE_WALLET_REQUESTS, ENABLE_TOURNAMENT_CANCELLATION,
+// ENABLE_TOURNAMENT_RESULTS) — see api/joinTournament.js, api/wallet.js,
+// api/admin.js.
 // The authoritative flag table (what each flag needs in the database and its
 // safe default) is README.md → "Feature flags". Do not add flag names here
 // that are not in that table.
@@ -43,5 +44,11 @@ export const features = {
   // entirely and joined players get them only through the RPC
   // (docs/AUDIT.md P0-3). Enabling it also requires the DB phase's
   // credentials table for admin room editing.
-  roomDetailsRpc: isTrue(env.VITE_FEATURE_ROOM_RPC)
+  roomDetailsRpc: isTrue(env.VITE_FEATURE_ROOM_RPC),
+
+  // The tournament_results table/RLS policy are deployed for this release.
+  // Operators can explicitly disable its player-facing reads while diagnosing
+  // a database deployment; result views then say so rather than inventing
+  // standings or payouts.
+  tournamentResults: env.VITE_FEATURE_TOURNAMENT_RESULTS !== 'false'
 };

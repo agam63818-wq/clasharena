@@ -6,7 +6,8 @@
 //   - authorization: no token (401), invalid token (401), non-admin (403),
 //     admin allowed (role read from profiles with the SERVICE-ROLE client,
 //     never from the request body);
-//   - createTournament / updateTournament / listRegistrations happy paths;
+//   - createTournament / updateTournament / getTournament / deleteTournament /
+//     listRegistrations happy paths;
 //   - invalid payloads (name, mode allow-list, prize, entry_fee, max_players,
 //     match_time, unknown action, malformed id);
 //   - status transition rules (server-side, against the DB's current status);
@@ -197,7 +198,7 @@ describe('POST /api/admin — createTournament', () => {
     ['bad match_time', validPayload({ match_time: 'tomorrow' }), /match time/i],
     ['missing match_time', validPayload({ match_time: '' }), /match time/i],
     ['bad image url', validPayload({ image_url: 'javascript:alert(1)' }), /url/i],
-    ['cancelled status', validPayload({ status: 'cancelled' }), /cancellation is not implemented/i],
+    ['cancelled status', validPayload({ status: 'cancelled' }), /only be set through the cancel action/i],
     ['unknown status', validPayload({ status: 'paused' }), /status/i],
     ['missing tournament object', undefined, /invalid tournament details/i]
   ])('400 for %s', async (_name, tournament, errMatch) => {
@@ -341,31 +342,22 @@ describe('POST /api/admin — updateTournament', () => {
   });
 
   describe('status transition rules (current status read from the DB)', () => {
-    it.each([
-      ['registration', 'upcoming', 200],
-      ['registration', 'live', 200],
-      ['upcoming', 'live', 200],
-      ['live', 'completed', 200],
-      ['completed', 'completed', 200],
-      ['completed', 'registration', 409],
-      ['live', 'registration', 409],
-      ['upcoming', 'completed', 409]
-    ])('%s -> %s is %i', async (from, to, expected) => {
-      const steps = [adminStep(), currentStep({ status: from })];
-      if (expected === 200) {
-        steps.push({ match: op('tournaments', 'update'), value: { data: TOURNAMENT_ROW, error: null } });
-        steps.push(auditStep());
-      }
+    const editableStatuses = ['registration', 'upcoming', 'live', 'completed'];
+
+    it.each(editableStatuses.flatMap(from => editableStatuses.map(to => [from, to])))('%s -> %s is allowed', async (from, to) => {
+      const steps = [
+        adminStep(),
+        currentStep({ status: from }),
+        { match: op('tournaments', 'update'), value: { data: { ...TOURNAMENT_ROW, status: to }, error: null } },
+        auditStep()
+      ];
       setup(steps);
       const res = makeRes();
       await adminHandler(
         post({ action: 'updateTournament', tournament: validPayload({ id: TOURNAMENT_ID, status: to }) }),
         res
       );
-      expect(res.statusCode).toBe(expected);
-      if (expected === 409) {
-        expect(res.body.error).toMatch(/status cannot change/i);
-      }
+      expect(res.statusCode).toBe(200);
     });
 
     it('409 and no write when the current row already has a status that cannot be changed', async () => {
@@ -379,7 +371,7 @@ describe('POST /api/admin — updateTournament', () => {
       expect(calls.filter((c) => c.op === 'update')).toHaveLength(0);
     });
 
-    it('cannot set status to cancelled (refund flow does not exist yet)', async () => {
+    it('cannot set status to cancelled outside the Cancel action', async () => {
       const calls = setup([adminStep(), currentStep()]);
       const res = makeRes();
       await adminHandler(
@@ -387,7 +379,7 @@ describe('POST /api/admin — updateTournament', () => {
         res
       );
       expect(res.statusCode).toBe(400);
-      expect(res.body.error).toMatch(/cancellation is not implemented/i);
+      expect(res.body.error).toMatch(/only be set through the cancel action/i);
       expect(calls.filter((c) => c.op === 'update')).toHaveLength(0);
     });
   });
@@ -409,13 +401,96 @@ describe('POST /api/admin — updateTournament', () => {
   });
 });
 
+// --- getTournament ---------------------------------------------------------
+
+describe('POST /api/admin — getTournament', () => {
+  const FULL_TOURNAMENT_ROW = {
+    ...TOURNAMENT_ROW,
+    room_id: 'room-123',
+    room_password: 'secret-pass',
+    image_url: 'https://example.com/banner.jpg',
+    rules: 'No teaming.',
+    created_at: '2026-10-01T10:00:00.000Z'
+  };
+
+  it('returns the complete editable row, including room credentials, for an admin', async () => {
+    const calls = setup([
+      adminStep(),
+      { match: selectSingle('tournaments'), value: { data: FULL_TOURNAMENT_ROW, error: null } }
+    ]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'getTournament', tournamentId: TOURNAMENT_ID }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ success: true, tournament: FULL_TOURNAMENT_ROW });
+    const read = calls.find((call) => call.table === 'tournaments');
+    expect(String(read.chain[0][1])).toContain('room_id');
+    expect(String(read.chain[0][1])).toContain('room_password');
+  });
+
+  it('rejects a non-admin before reading the tournament', async () => {
+    const calls = setup([adminStep('user')]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'getTournament', tournamentId: TOURNAMENT_ID }, 'tok-A'), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(calls.filter((call) => call.table === 'tournaments')).toHaveLength(0);
+  });
+
+  it('returns 404 when the requested tournament does not exist', async () => {
+    setup([
+      adminStep(),
+      { match: selectSingle('tournaments'), value: { data: null, error: { message: 'no rows' } } }
+    ]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'getTournament', tournamentId: TOURNAMENT_ID }), res);
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBe('Tournament not found.');
+  });
+});
+
+// --- deleteTournament ------------------------------------------------------
+
+describe('POST /api/admin — deleteTournament', () => {
+  it('hard-deletes an empty tournament for an admin', async () => {
+    const calls = setup([
+      adminStep(),
+      { match: countQuery('match_registrations'), value: { count: 0, error: null } },
+      { match: op('tournaments', 'delete'), value: { data: { id: TOURNAMENT_ID, name: 'Friday Showdown' }, error: null } },
+      auditStep()
+    ]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'deleteTournament', tournamentId: TOURNAMENT_ID }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.tournamentId).toBe(TOURNAMENT_ID);
+    expect(res.body.auditLogged).toBe(true);
+    const deletion = calls.find((call) => call.table === 'tournaments' && call.op === 'delete');
+    expect(deletion.chain).toContainEqual(['eq', 'id', TOURNAMENT_ID]);
+  });
+
+  it('keeps a tournament with registrations and gives the exact cancellation reason', async () => {
+    const calls = setup([
+      adminStep(),
+      { match: countQuery('match_registrations'), value: { count: 3, error: null } }
+    ]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'deleteTournament', tournamentId: TOURNAMENT_ID }), res);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe('This tournament has 3 registered player(s) and cannot be deleted. Cancel it instead so player refunds can be handled safely.');
+    expect(calls.filter((call) => call.table === 'tournaments' && call.op === 'delete')).toHaveLength(0);
+  });
+});
+
 // --- listRegistrations -----------------------------------------------------
 
 describe('POST /api/admin — listRegistrations', () => {
   it('200 with the registration rows for an admin', async () => {
     const rows = [
-      { id: 'r1', tournament_id: TOURNAMENT_ID, ff_uid: '123456789', ign: 'Alpha', profiles: { username: 'alpha' } },
-      { id: 'r2', tournament_id: TOURNAMENT_ID, ff_uid: '987654321', ign: 'Bravo', profiles: { username: 'bravo' } }
+      { id: 'r1', tournament_id: TOURNAMENT_ID, user_id: USER_A.id, ff_uid: '123456789', ign: 'Alpha', profiles: { username: 'alpha', phone: '9876543210' } },
+      { id: 'r2', tournament_id: TOURNAMENT_ID, user_id: ADMIN.id, ff_uid: '987654321', ign: 'Bravo', profiles: { username: 'bravo', phone: null } }
     ];
     const calls = setup([
       adminStep(),
@@ -429,10 +504,21 @@ describe('POST /api/admin — listRegistrations', () => {
     expect(res.body.registrations).toHaveLength(2);
 
     const query = calls.find((c) => c.table === 'match_registrations');
-    // bounded query + the embedded username read the UI needs
+    // Bounded query, and phone is deliberately included only in this
+    // server-authorized admin listing (never in player-facing reads).
     expect(query.chain).toContainEqual(['order', 'created_at', { ascending: false }]);
     expect(query.chain.some(([fn]) => fn === 'limit')).toBe(true);
-    expect(String(query.chain[0][1])).toContain('profiles(username)');
+    expect(query.chain[0][1]).toBe('id, tournament_id, user_id, ff_uid, ign, created_at, profiles(username, phone)');
+    expect(res.body.registrations[0].profiles.phone).toBe('9876543210');
+  });
+
+  it('rejects a non-admin before querying registrations', async () => {
+    const calls = setup([adminStep('user')]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'listRegistrations' }, 'tok-A'), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(calls.filter((call) => call.table === 'match_registrations')).toHaveLength(0);
   });
 
   it('500 with a safe message when the read fails', async () => {
@@ -445,6 +531,199 @@ describe('POST /api/admin — listRegistrations', () => {
     expect(res.statusCode).toBe(500);
     expect(res.body.error).toBe('Could not load registered players.');
     expect(JSON.stringify(res.body)).not.toMatch(/relation|does not exist/i);
+  });
+});
+
+// --- getTournamentResults / setTournamentResults --------------------------
+
+describe('POST /api/admin — getTournamentResults', () => {
+  beforeEach(() => {
+    delete process.env.ENABLE_TOURNAMENT_RESULTS;
+  });
+
+  afterEach(() => {
+    delete process.env.ENABLE_TOURNAMENT_RESULTS;
+  });
+
+  it('returns editable result fields only to an authenticated admin', async () => {
+    const rows = [{ user_id: USER_A.id, placement: 1, kills: 8, prize_amount: 1000, note: 'Winner' }];
+    const calls = setup([
+      adminStep(),
+      { match: (c) => c.table === 'tournament_results', value: { data: rows, error: null } }
+    ]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'getTournamentResults', tournamentId: TOURNAMENT_ID }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toEqual({ success: true, results: rows });
+    const read = calls.find(c => c.table === 'tournament_results');
+    expect(read.chain).toContainEqual(['eq', 'tournament_id', TOURNAMENT_ID]);
+    expect(read.chain[0][1]).toBe('user_id, placement, kills, prize_amount, note');
+  });
+
+  it('returns an honest 503 when the results table is not installed', async () => {
+    setup([
+      adminStep(),
+      { match: (c) => c.table === 'tournament_results', value: { data: null, error: { code: '42P01', message: 'relation does not exist' } } }
+    ]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'getTournamentResults', tournamentId: TOURNAMENT_ID }), res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body.error).toMatch(/requires database setup.*tournament_results/i);
+  });
+});
+
+const validResults = (extra = {}) => ([
+  { user_id: USER_A.id, placement: 1, kills: 8, prize_amount: 750, note: 'Winner', ...extra },
+  { user_id: ADMIN.id, placement: 2, kills: 4, prize_amount: 250, note: null }
+]);
+
+const resultRegistrationsStep = (rows = [USER_A.id, ADMIN.id]) => ({
+  match: (c) => c.table === 'match_registrations' && c.op === 'select' && !c.single && !c.maybeSingle,
+  value: { data: rows.map(user_id => ({ user_id })), error: null }
+});
+
+describe('POST /api/admin — setTournamentResults', () => {
+  beforeEach(() => {
+    delete process.env.ENABLE_TOURNAMENT_RESULTS;
+  });
+
+  afterEach(() => {
+    delete process.env.ENABLE_TOURNAMENT_RESULTS;
+  });
+
+  it('rejects a non-admin before reading registrations or calling the RPC', async () => {
+    const calls = setup([adminStep('user')], { 'tok-A': USER_A });
+    const res = makeRes();
+    await adminHandler(post({ action: 'setTournamentResults', tournamentId: TOURNAMENT_ID, results: validResults() }, 'tok-A'), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(calls.some(c => c.table === 'match_registrations' || c.kind === 'rpc')).toBe(false);
+  });
+
+  it('validates registered players and records results through the service-role RPC', async () => {
+    const calls = setup([
+      adminStep(),
+      resultRegistrationsStep(),
+      { match: (c) => c.kind === 'rpc' && c.fn === 'admin_set_tournament_results', value: { success: true } },
+      auditStep()
+    ]);
+    const res = makeRes();
+    await adminHandler(post({
+      action: 'setTournamentResults',
+      tournamentId: TOURNAMENT_ID,
+      results: validResults({ ignored_balance: 999999 })
+    }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      tournament: { id: TOURNAMENT_ID, status: 'completed' },
+      resultCount: 2,
+      auditLogged: true
+    });
+
+    const registrationRead = calls.find(c => c.table === 'match_registrations');
+    expect(registrationRead.chain).toContainEqual(['eq', 'tournament_id', TOURNAMENT_ID]);
+
+    const rpcCall = calls.find(c => c.kind === 'rpc');
+    expect(rpcCall.args).toEqual({
+      p_tournament_id: TOURNAMENT_ID,
+      p_admin_id: ADMIN.id,
+      p_results: [
+        { user_id: USER_A.id, placement: 1, kills: 8, prize_amount: 750, note: 'Winner' },
+        { user_id: ADMIN.id, placement: 2, kills: 4, prize_amount: 250, note: null }
+      ]
+    });
+    expect(calls.find(auditRow).payload[0]).toMatchObject({
+      action: 'setTournamentResults',
+      target_type: 'tournament',
+      target_id: TOURNAMENT_ID,
+      details: { result_count: 2, recorded_prize_total: 1000 }
+    });
+  });
+
+  it.each([
+    ['zero placement', validResults({ placement: 0 }), /placement/i],
+    ['fractional placement', validResults({ placement: 1.5 }), /placement/i],
+    ['negative kills', validResults({ kills: -1 }), /kills/i],
+    ['fractional kills', validResults({ kills: 1.2 }), /kills/i],
+    ['negative prize', validResults({ prize_amount: -1 }), /prize amount/i],
+    ['invalid user id', validResults({ user_id: 'not-a-uuid' }), /invalid player/i]
+  ])('400 for %s before querying registrations', async (_name, results, errorMatch) => {
+    const calls = setup([adminStep()]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'setTournamentResults', tournamentId: TOURNAMENT_ID, results }), res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(errorMatch);
+    expect(calls.some(c => c.table === 'match_registrations')).toBe(false);
+    expect(calls.some(c => c.kind === 'rpc')).toBe(false);
+  });
+
+  it('400 when a submitted player is not registered in the selected tournament', async () => {
+    const calls = setup([
+      adminStep(),
+      resultRegistrationsStep([USER_A.id])
+    ]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'setTournamentResults', tournamentId: TOURNAMENT_ID, results: validResults() }), res);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toMatch(/registered for this tournament/i);
+    expect(calls.some(c => c.kind === 'rpc')).toBe(false);
+  });
+
+  it('returns an honest 503 when the results RPC is missing', async () => {
+    setup([
+      adminStep(),
+      resultRegistrationsStep(),
+      {
+        match: (c) => c.kind === 'rpc' && c.fn === 'admin_set_tournament_results',
+        value: rpcFailure({ code: 'PGRST202', message: 'Could not find the function public.admin_set_tournament_results in the schema cache' })
+      }
+    ]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'setTournamentResults', tournamentId: TOURNAMENT_ID, results: validResults() }), res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body.error).toMatch(/requires database setup.*admin_set_tournament_results/i);
+  });
+
+  it('maps an RPC tournament-not-found verdict to 404 without leaking unknown verdicts', async () => {
+    let calls = setup([
+      adminStep(),
+      resultRegistrationsStep(),
+      { match: (c) => c.kind === 'rpc', value: { error: 'Tournament not found' } }
+    ]);
+    let res = makeRes();
+    await adminHandler(post({ action: 'setTournamentResults', tournamentId: TOURNAMENT_ID, results: validResults() }), res);
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error).toBe('Tournament not found.');
+
+    calls = setup([
+      adminStep(),
+      resultRegistrationsStep(),
+      { match: (c) => c.kind === 'rpc', value: { error: 'sensitive database failure' } }
+    ]);
+    res = makeRes();
+    await adminHandler(post({ action: 'setTournamentResults', tournamentId: TOURNAMENT_ID, results: validResults() }), res);
+    expect(res.statusCode).toBe(500);
+    expect(res.body.error).toBe('Could not save tournament results right now.');
+    expect(JSON.stringify(res.body)).not.toContain('sensitive database failure');
+    expect(calls.some(c => c.kind === 'rpc')).toBe(true);
+  });
+
+  it('does not touch registrations or the RPC when the server feature is explicitly disabled', async () => {
+    process.env.ENABLE_TOURNAMENT_RESULTS = 'false';
+    const calls = setup([adminStep()]);
+    const res = makeRes();
+    await adminHandler(post({ action: 'setTournamentResults', tournamentId: TOURNAMENT_ID, results: validResults() }), res);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.body.error).toMatch(/not enabled/i);
+    expect(calls.some(c => c.table === 'match_registrations' || c.kind === 'rpc')).toBe(false);
   });
 });
 

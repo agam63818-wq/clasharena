@@ -18,17 +18,19 @@ export function validateTournamentId(value) {
 }
 
 export function validateFfUid(value) {
-  if (typeof value !== 'string' || !FF_UID_RE.test(value)) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!FF_UID_RE.test(trimmed)) {
     throw new HttpError(400, 'Free Fire UID must be 5-20 digits.');
   }
-  return value;
+  return trimmed;
 }
 
 export function validateIgn(value) {
-  if (typeof value !== 'string' || !IGN_RE.test(value)) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!IGN_RE.test(trimmed)) {
     throw new HttpError(400, 'In-game name must be 2-32 letters, numbers, spaces or . - _ \' characters.');
   }
-  return value;
+  return trimmed;
 }
 
 export function validateStringField(value, { field, min, max }) {
@@ -137,7 +139,7 @@ function toMode(value) {
 
 function toStatus(value) {
   if (value === 'cancelled') {
-    throw new HttpError(400, 'Tournament cancellation is not implemented yet — no status was changed.');
+    throw new HttpError(400, 'Cancelled status can only be set through the Cancel action.');
   }
   if (typeof value !== 'string' || !TOURNAMENT_STATUSES.includes(value)) {
     throw new HttpError(400, `Status must be one of: ${TOURNAMENT_STATUSES.join(', ')}.`);
@@ -160,14 +162,14 @@ const TOURNAMENT_COLUMNS = {
   rules: { validate: (v) => toOptionalText(v, 'Rules', 2000), default: null }
 };
 
-// Allowed status progression. Same-status updates are always allowed (an admin
-// editing the name of a completed match must not be blocked). 'cancelled' is
-// not a target: the cancellation-with-refunds flow does not exist yet.
-const STATUS_TRANSITIONS = {
-  registration: ['registration', 'upcoming', 'live'],
-  upcoming: ['upcoming', 'live'],
-  live: ['live', 'completed'],
-  completed: ['completed']
+// Admins may correct a tournament's lifecycle state in either direction. The
+// only excluded status is `cancelled`: it can be reached solely through the
+// cancellation action, which is the only path that can handle refunds.
+export const STATUS_TRANSITIONS = {
+  registration: [...TOURNAMENT_STATUSES],
+  upcoming: [...TOURNAMENT_STATUSES],
+  live: [...TOURNAMENT_STATUSES],
+  completed: [...TOURNAMENT_STATUSES]
 };
 
 export function assertStatusTransition(currentStatus, nextStatus) {

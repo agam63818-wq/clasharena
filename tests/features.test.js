@@ -21,4 +21,8 @@ describe('src/config/features.js — safe defaults', () => {
   it('walletRequests defaults OFF — wallet_requests table + RPCs are not applied yet (DB phase)', () => {
     expect(features.walletRequests).toBe(false);
   });
+
+  it('tournamentResults defaults ON because the deployed results table is available', () => {
+    expect(features.tournamentResults).toBe(true);
+  });
 });

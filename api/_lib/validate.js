@@ -4,17 +4,22 @@
 
 import { HttpError } from './errors.js';
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Free Fire UIDs are numeric; 5–20 digits covers legacy through newest.
 const FF_UID_RE = /^[0-9]{5,20}$/;
 // IGN: letters, digits, space, underscore, dash, dot, apostrophe. 2–32 chars.
 const IGN_RE = /^[A-Za-z0-9 _.\-']{2,32}$/;
 
+// Tournament ids are bigint identity values in the live database (NOT uuids).
+// Accept a positive integer (number or digits-only string) and always return a Number.
+const TOURNAMENT_ID_RE = /^[1-9][0-9]{0,14}$/;
+
 export function validateTournamentId(value) {
-  if (typeof value !== 'string' || !UUID_RE.test(value)) {
+  const asString =
+    typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : value;
+  if (typeof asString !== 'string' || !TOURNAMENT_ID_RE.test(asString)) {
     throw new HttpError(400, 'Invalid tournament.');
   }
-  return value;
+  return Number(asString);
 }
 
 export function validateFfUid(value) {

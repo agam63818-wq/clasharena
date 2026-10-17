@@ -639,7 +639,7 @@ describe('POST /api/admin — setTournamentResults', () => {
     expect(calls.find(auditRow).payload[0]).toMatchObject({
       action: 'setTournamentResults',
       target_type: 'tournament',
-      target_id: TOURNAMENT_ID,
+      target_id: String(TOURNAMENT_ID),
       details: { result_count: 2, recorded_prize_total: 1000 }
     });
   });

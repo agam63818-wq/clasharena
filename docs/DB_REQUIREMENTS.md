@@ -17,11 +17,11 @@
 > contract. In particular, proposed **003, 005, and 006 must be rewritten for
 > bigint before application**. See §7 for the full draft-by-draft status.
 >
-> **Important application compatibility gap:** the current route validator still
-> accepts UUID tournament IDs. That is not evidence that the deployed bigint
-> contract is wrong; it is an open, separately-scoped application migration item.
-> No ID-validation or feature-flag values are changed by this documentation
-> correction.
+> **Application compatibility gap — closed 2026-10-17:** `validateTournamentId`
+> in `api/_lib/validate.js` now accepts the deployed bigint tournament IDs (a
+> positive integer, as number or digits-only string, returned as a Number) and
+> rejects UUID-shaped values with 400. The audit `target_id` is stringified for
+> its TEXT column. No SQL or feature-flag values were changed.
 
 **Source of truth:** the owner-supplied deployed contract above plus application
 code in this repo. Where they disagree, the deployed contract wins. The live
@@ -62,7 +62,7 @@ Notes:
 
 | Column | Type / contract | Label | Used by (evidence) |
 |---|---|---|---|
-| `id` | **`bigint` PK (deployed)** | [required by code] | referenced everywhere; the current UUID-only validator is an open compatibility gap noted above |
+| `id` | **`bigint` PK (deployed)** | [required by code] | referenced everywhere; validated as bigint by `api/_lib/validate.js` `validateTournamentId` (gap closed 2026-10-17) |
 | `name` | `text not null` | [required by code] | admin form `AdminView.jsx`; written server-side by `api/admin.js` `createTournament`/`updateTournament` (3–80 chars, validated there) |
 | `mode` | `text not null default 'Solo'` | [required by code] | admin form `AdminView.jsx` (Solo/Duo/Squad/1v1) → server allow-list `api/_lib/validate.js` `TOURNAMENT_MODES`; display `App.jsx:546, 634` |
 | `prize` | **`numeric(12,2)` (deployed)**, not null default `0` | [required by code] | admin form → `api/admin.js` (>= 0); display `App.jsx:540, 622` |
@@ -94,10 +94,12 @@ Constraints required:
 - FK to `tournaments` with `ON DELETE CASCADE` — [recommended]: `deleteTournament.js:32–44` deletes registrations first, then the tournament, in two non-transactional steps; a cascade (or better, a single delete RPC) removes the orphan window.
 - FK to `auth.users` with `ON DELETE CASCADE` — [recommended] (profile deletion hygiene).
 
-**Bigint compatibility note:** client and server code that currently validates or
-casts a tournament ID as a UUID must be changed in a coordinated application
-release before relying on this deployed schema. `user_id` remains UUID because it
-references Supabase Auth; only tournament / registration identities are bigint.
+**Bigint compatibility note:** tournament IDs are validated as bigint end-to-end
+since 2026-10-17: `validateTournamentId` accepts positive integers (number or
+digits-only string) and returns a Number; `openTournament` in `App.jsx` accepts a
+numeric id; the audit-log `target_id` is stringified for its TEXT column. `user_id`
+remains UUID because it references Supabase Auth; only tournament / registration
+identities are bigint.
 
 ### 1.3.1 `tournament_results` — deployed standings data
 

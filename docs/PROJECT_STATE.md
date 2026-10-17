@@ -1,10 +1,15 @@
 # ClashArena — Project State
 
-**Last updated:** 2026-10-16 (Asia/Kolkata)
+**Last updated:** 2026-10-17 (Asia/Kolkata)
 
-**Working branch:** `arena/b00f9890-clasharena`
+**Working branch:** `fix/bigint-tournament-ids` — a new branch cut from the
+latest `main` (`a5675ef`), created per the user's explicit instruction for this
+task. The working tree of the previous local checkout (`feat/my-matches-join-ux`)
+was left untouched; this branch lives in a separate worktree.
 
-**Pull request:** [#9](https://github.com/agam63818-wq/clasharena/pull/9) is open and must **not** be merged unless the user explicitly requests it.
+**Pull request:** PR #9 was merged into `main` (`a5675ef`). A new PR from
+`fix/bigint-tournament-ids` carries the bigint tournament-ID fix below and must
+**not** be merged unless the user explicitly requests it.
 
 ## Mandatory new-session handoff
 
@@ -29,33 +34,40 @@ assumptions in code and proposed migrations:
 
 ## Current implementation and documentation work
 
-### Completed on this branch
+### Completed on this branch (2026-10-17)
 
-- Signup/profile completion, admin tournament management, player match details,
-  phone-required joining, and admin tournament-results management are in the
-  open PR (through commit `203608b`).
-- `api/profile.js` now checks a duplicate mobile number with `.limit(1)` and the
-  first returned row rather than `.maybeSingle()`. Legacy data containing two
-  other owners of the same number returns the safe `409` / `PHONE_IN_USE`
-  response instead of a multiple-row database error.
-- `DateTimeAmPm` in `src/pages/AdminView.jsx` now keeps local hour, minute, and
-  AM/PM selections while no date exists; an ISO timestamp is emitted only after
-  a date is selected. Existing saved times still hydrate the controls.
-- Tests cover the duplicate legacy phone-owner response, a no-date time draft,
-  and saved-time hydration.
-- `replit.md` now starts with the mandatory session protocol.
-- `docs/DB_REQUIREMENTS.md` now records the deployed bigint/result-RPC contract
-  and marks UUID-era proposed migrations as rewrite-gated. No SQL was edited or
-  executed.
+Prior arena-session work (signup/profile completion, admin tournament
+management, player match details, phone-required joining, results management)
+was merged into `main` via PR #9.
 
-### Verification status for the current follow-up
+This branch closes open item 1 below — the bigint application-compatibility
+gap that made every tournament-id route answer `400 "Invalid tournament."`:
 
-- `npm run lint` — passed (exit 0).
+- `api/_lib/validate.js` `validateTournamentId` now accepts a positive integer
+  (number, or digits-only string matching `/^[1-9][0-9]{0,14}$/`, safe integers
+  only) and returns a **Number**; UUID strings and every other shape are
+  rejected with `400 "Invalid tournament."`. This unblocks `joinTournament`,
+  `deleteTournament`, and admin `getTournament` / `updateTournament` /
+  `deleteTournament` / `cancelTournament` / results for the deployed bigint ids.
+- `api/_lib/audit.js` stringifies `target_id` (empty → `null`) because the
+  audit-log column is TEXT while tournament targets are bigint.
+- `src/App.jsx` `openTournament()` accepts a numeric id candidate, not just a
+  string, so numeric ids from data navigate the same as string ids.
+- Tests: `tests/helpers.js` `TOURNAMENT_ID` is now the number `4242`; the admin
+  audit assertion expects `String(TOURNAMENT_ID)`; new
+  `tests/tournamentId.test.js` (20 regression tests) covers accepts/rejects
+  (uuid, zero, negatives, floats, `'1e3'`, `'007'`, whitespace, null, objects,
+  unsafe integers, over-long).
+- `docs/DB_REQUIREMENTS.md` notes that described the UUID-only validator as an
+  open gap were updated to record the closure. No SQL was written, edited, or
+  run; `supabase/proposed/` is untouched.
+
+### Verification status for this task (real runs, 2026-10-17)
+
+- `npm run lint` — passed (exit 0, eslint reported nothing).
 - `npm run build` — passed with Vite 5.4.21; 2,182 modules transformed.
-- `npm test` — passed: **9 test files, 225 tests**.
-- Focused follow-up tests also passed: `tests/profile.test.js` and
-  `tests/adminView.test.js` (13 tests total).
-- `git diff --check` — passed (no whitespace errors).
+- `npm test` — passed: **10 test files, 245 tests** (was 225 before this
+  branch; `tests/tournamentId.test.js` adds 20).
 - The full test suite deliberately logs mocked database failure paths to stderr;
   its process exit was 0 and all tests passed.
 
@@ -79,11 +91,16 @@ Vercel/Supabase environment values**:
 
 ## Open items and safety constraints
 
-1. **Bigint application compatibility:** `validateTournamentId` currently
-   accepts UUID-format IDs. This is incompatible with the deployed bigint
-   tournament contract and needs a separately scoped, end-to-end application
-   change (client, APIs, tests, and RPC callers). It was documented here, not
-   changed in this follow-up.
+1. ~~**Bigint application compatibility:** `validateTournamentId` currently
+   accepts UUID-format IDs.~~ **Resolved on this branch (2026-10-17):** the
+   validator, audit stringify, client `openTournament`, and all test fixtures
+   are bigint-native now. Remaining UUID-shaped fixtures are intentionally
+   correct: user/profile ids and wallet-request ids stay UUID
+   (`api/admin.js` `RESULT_UUID_RE`, `tests/profile.test.js`,
+   `tests/wallet.test.js`); `tests/playerSide.test.jsx` uses a UUID-style
+   tournament fixture purely as an opaque display value with no format
+   assertion; `tests/api.test.js` uses the label `'not-a-uuid'` for a
+   still-invalid tournament id. No real bugs found beyond the fixed validator.
 2. **SQL is not approved in this workflow:** do not write, run, or edit SQL; do
    not touch Supabase; do not edit `supabase/proposed/*.sql`.
 3. Proposed **003, 005, and 006** must be rewritten for bigint before they can
@@ -94,7 +111,7 @@ Vercel/Supabase environment values**:
    functionality must stay behind its existing flags and fail honestly when
    missing.
 5. Do not change feature-flag values without explicit user approval. Do not
-   merge PR #9, create a new branch, or open a new PR for this work.
+   merge this branch's PR unless the user explicitly asks.
 6. Keep permanent rules in `replit.md`: no secrets, no client-trusted identity
    or money values, server-side authorization, no fake payments, and truthful
    test/build reporting.
@@ -103,5 +120,5 @@ Vercel/Supabase environment values**:
 
 For every future task: update this document with completed work, verification
 results, unchanged flags, and remaining risks; then run the requested checks,
-commit on `arena/b00f9890-clasharena`, push that branch, and stop. Do not merge
+commit on the task's working branch, push that branch, and stop. Do not merge
 unless explicitly asked.

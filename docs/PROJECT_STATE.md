@@ -2,14 +2,15 @@
 
 **Last updated:** 2026-10-17 (Asia/Kolkata)
 
-**Working branch:** `fix/bigint-tournament-ids` — a new branch cut from the
-latest `main` (`a5675ef`), created per the user's explicit instruction for this
-task. The working tree of the previous local checkout (`feat/my-matches-join-ux`)
-was left untouched; this branch lives in a separate worktree.
+**Working branch:** `feat/razorpay-server` — a new branch cut from the latest
+`main` (`9b9abe2`, after the bigint fix in PR #10 was merged), created per the
+user's explicit instruction for the Razorpay wallet top-up release (part R1).
+The user has asked for PRs to be opened ONLY when they say so; this branch is
+pushed but has NO pull request yet.
 
-**Pull request:** PR #9 was merged into `main` (`a5675ef`). A new PR from
-`fix/bigint-tournament-ids` carries the bigint tournament-ID fix below and must
-**not** be merged unless the user explicitly requests it.
+**History:** the bigint tournament-ID fix (branch `fix/bigint-tournament-ids`)
+was merged into `main` via PR #10. Its notes remain below under the bigint
+heading.
 
 ## Mandatory new-session handoff
 
@@ -34,7 +35,57 @@ assumptions in code and proposed migrations:
 
 ## Current implementation and documentation work
 
-### Completed on this branch (2026-10-17)
+### Razorpay R1 — server (2026-10-17, this branch)
+
+Scope honored: wallet top-up deposits only (no withdrawals/payouts/refunds),
+test mode first, no new npm dependency (Node `crypto` + `fetch`), no SQL, no
+flag values changed. Exactly 2 functions added (project now has 7 of 12 on
+Vercel Hobby):
+
+- `api/payments.js` — one POST router (`createOrder` / `verify` /
+  `listPayments`). Every action runs behind `ENABLE_PAYMENTS !== 'true' → 503`
+  and `requireUser` (identity from the Bearer token only).
+  - `createOrder`: whole rupees 10–5000 (constants at top); Razorpay Orders
+    API with Basic auth; a `payments` row is written with the VERIFIED user,
+    Razorpay's own order id/amount, `status: 'created'`; rate limit of 5
+    created orders / 10 min per user → 429; responds
+    `{ orderId, amountPaise, currency, keyId }` — never the secret.
+  - `verify`: format checks (≤64 chars, alphanumeric+underscore) → order row
+    by `provider_order_id` with `user_id === verified user` (else 404) →
+    HMAC-SHA256 signature over `order|payment` via `timingSafeEqual` (bad →
+    400, nothing credited) → Razorpay payment GET; only `captured` proceeds
+    (`authorized` → `{ status: 'pending' }`), order/amount/currency must match
+    the recorded row using RAZORPAY'S values → `credit_payment` RPC with
+    `p_event_id: 'verify:<payment_id>'` → `{ status: 'credited' |
+    'already_credited' | 'pending', balance }`.
+  - `listPayments`: caller's last 20 payment rows.
+- `api/razorpayWebhook.js` — POST only, no user auth; body parser disabled
+  (`export const config = { api: { bodyParser: false } }`) and the raw stream
+  bytes are read, so the HMAC-SHA256 signature (header `x-razorpay-signature`)
+  is verified against exactly what Razorpay signed; JSON parsed only after the
+  check. `payment.captured` → `credit_payment` with the
+  `x-razorpay-event-id` header: success/duplicate → 200; 'Unknown order' /
+  'Amount mismatch' / 'Currency mismatch' / 'Payment already used' → 200 +
+  console.error with ids only; DB/transport error → 500 so Razorpay retries
+  (idempotent). `payment.failed` → `status: 'failed'` + short reason ONLY
+  where the order exists and `status = 'created'` (credited payments are
+  never touched). Any other event → 200 ignored.
+- `tests/payments.test.js` — 41 tests: flag off, missing keys, 401s, bad
+  amounts, client-supplied user_id/amount_paise/currency ignored, rate-limit
+  429, gateway 502s, other user's order 404, bad/tampered signature, not
+  captured / authorized / amount-currency mismatch, duplicate verify
+  (duplicate RPC verdict and already-credited row), listPayments user filter
+  and limit, webhook bad signature, raw-body tamper proof (re-serialized JSON
+  fails), valid captured credit with event id, duplicate event, unknown order,
+  amount mismatch logging, retry-on-500, failed-payment status filter, secret
+  never logged.
+
+The deployed `credit_payment(p_provider_order_id, p_provider_payment_id,
+p_amount_paise, p_currency, p_event_id)` RPC remains the ONLY path a payment
+becomes balance. Balance, transactions and payments.status are never written
+any other way here.
+
+### Bigint tournament-ID fix (2026-10-17, merged via PR #10)
 
 Prior arena-session work (signup/profile completion, admin tournament
 management, player match details, phone-required joining, results management)
@@ -62,24 +113,34 @@ gap that made every tournament-id route answer `400 "Invalid tournament."`:
   open gap were updated to record the closure. No SQL was written, edited, or
   run; `supabase/proposed/` is untouched.
 
-### Verification status for this task (real runs, 2026-10-17)
+### Verification status (real runs, 2026-10-17)
+
+For R1 on `feat/razorpay-server`:
+
+- `npm run lint` — passed (exit 0).
+- `npm run build` — passed with Vite 5.4.21; 2,182 modules transformed.
+- `npm test` — passed: **11 test files, 286 tests** (245 before; 41 new in
+  `tests/payments.test.js`). The suite deliberately logs mocked failure paths
+  to stderr; process exit was 0.
+
+For the merged bigint fix (`fix/bigint-tournament-ids`, PR #10):
 
 - `npm run lint` — passed (exit 0, eslint reported nothing).
 - `npm run build` — passed with Vite 5.4.21; 2,182 modules transformed.
-- `npm test` — passed: **10 test files, 245 tests** (was 225 before this
-  branch; `tests/tournamentId.test.js` adds 20).
-- The full test suite deliberately logs mocked database failure paths to stderr;
-  its process exit was 0 and all tests passed.
+- `npm test` — passed: **10 test files, 245 tests** (was 225 before;
+  `tests/tournamentId.test.js` adds 20).
 
-## Feature flags — unchanged
+## Feature flags
 
-No feature-flag value was changed in this follow-up. The values below are
-repository defaults/source behavior, **not a claim about uninspected live
-Vercel/Supabase environment values**:
+No flag VALUE was changed on this branch. R1 introduces one new server flag,
+which ships OFF (every payment route answers 503 until the owner explicitly
+sets it). The values below are repository defaults/source behavior, **not a
+claim about uninspected live Vercel/Supabase environment values**:
 
 | Flag | Current repository default / behavior |
 |---|---|
-| `VITE_FEATURE_PAYMENTS` | `false` unless explicitly set to `true` |
+| `ENABLE_PAYMENTS` | **new (R1)**: `false` unless exactly `true`; when not `true` every payment route answers 503 "Payments are not enabled." |
+| `VITE_FEATURE_PAYMENTS` | `false` unless explicitly set to `true` (stays off until R2 lands and is merged) |
 | `VITE_FEATURE_WALLET_TRANSACTIONS` | enabled unless explicitly set to `false` |
 | `VITE_FEATURE_WALLET_REQUESTS` | `false` unless explicitly set to `true` |
 | `VITE_FEATURE_ROOM_RPC` | `false` unless explicitly set to `true` |
@@ -89,9 +150,22 @@ Vercel/Supabase environment values**:
 | `ENABLE_TOURNAMENT_CANCELLATION` | `false` unless exactly `true` |
 | `ENABLE_TOURNAMENT_RESULTS` | enabled unless explicitly set to `false` |
 
+New server env vars read by R1 (values are NEVER logged or returned):
+`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` (Basic auth to the Razorpay API),
+`RAZORPAY_WEBHOOK_SECRET` (webhook HMAC). They are owner-side Vercel
+environment variables; the owner checklist supplies test-mode values and
+leaves the two payment flags unset until R1+R2 are merged.
+
 ## Open items and safety constraints
 
-1. ~~**Bigint application compatibility:** `validateTournamentId` currently
+1. **Razorpay release continues:** R0 (`agent_docs_sync.txt` content was not
+   provided to the agent — pending), R2 (wallet UI, behind
+   `VITE_FEATURE_PAYMENTS`), R3 (hardening/docs/smoke test). The owner
+   checklist (test keys, Vercel env vars, webhook registration) is owner-side
+   and has NOT been assumed done.
+2. **PRs on hold:** the user opens/merges PRs on request only.
+   `feat/razorpay-server` is pushed with NO pull request yet.
+3. ~~**Bigint application compatibility:** `validateTournamentId` currently
    accepts UUID-format IDs.~~ **Resolved on this branch (2026-10-17):** the
    validator, audit stringify, client `openTournament`, and all test fixtures
    are bigint-native now. Remaining UUID-shaped fixtures are intentionally

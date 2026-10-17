@@ -493,7 +493,7 @@ export default function App() {
   };
 
   const openTournament = async (candidate, backView = 'home') => {
-    const tournamentId = typeof candidate === 'string'
+    const tournamentId = (typeof candidate === 'string' || typeof candidate === 'number')
       ? candidate
       : candidate?.id || candidate?.tournament_id || candidate?.tournaments?.id;
     if (!tournamentId) return;

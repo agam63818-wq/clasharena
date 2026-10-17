@@ -15,7 +15,8 @@ export async function recordAdminAction(supabase, { adminId, action, targetType,
         admin_id: adminId,
         action,
         target_type: targetType,
-        target_id: targetId || null,
+        // target_id is a TEXT column (tournament ids are bigint, user ids are uuid).
+        target_id: targetId === undefined || targetId === null || targetId === '' ? null : String(targetId),
         details: details || {}
       }
     ]);

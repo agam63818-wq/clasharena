@@ -1,6 +1,6 @@
 # ClashArena - Project State (READ THIS FIRST in every new session)
 
-Last verified: 2026-10-17 (PR #10 merged, atomic join enabled, payments tables created, Razorpay R1 server code reviewed). The coding agent MUST update this file at
+Last verified: 2026-10-18 (PR #10 merged, atomic join enabled, payments tables created, Razorpay R1 server + R2 wallet UI written; payments flags still OFF). The coding agent MUST update this file at
 the end of every task (what changed, flag values, open items) and commit it on the same branch.
 
 ## How we work
@@ -92,11 +92,24 @@ Tables: `profiles`, `tournaments`, `match_registrations`, `transactions`, `tourn
   payment.captured -> credit_payment and payment.failed -> payments.status 'failed' only if still 'created'; rejected credits
   answer 200 and log ids only). 41 tests in tests/payments.test.js. Both answer 503 unless `ENABLE_PAYMENTS` is exactly 'true'.
   Not verified in a real runtime yet: raw-body access on Vercel and the webhook signature with a real Razorpay test event.
+- Razorpay R2 (client, branch arena/27bdeaa7-clasharena): Wallet 'Add money' UI in `src/App.jsx` WalletView +
+  `createPaymentOrder`/`verifyPayment`/`listPayments` in `src/lib/apiClient.js`, all behind `features.payments`
+  (`VITE_FEATURE_PAYMENTS`, still unset/OFF — with the flag off the wallet keeps today's honest "coming soon" state).
+  Flow: createOrder -> load checkout.js on demand (once) -> Razorpay Checkout -> server verify; success is shown
+  ONLY on verify 'credited'/'already_credited' or a polled Payments-list credit after a 'pending' verify (poll:
+  4 x 2s, new-credited-row detection vs a pre-top-up snapshot). Amount chips 50/100/200/500 + custom whole-rupee
+  amount (10-5000, server limits), ref+disabled double-tap guard, dismissed/script/network/verify-error honest
+  states, visible 'TEST MODE - no real money' banner once an order returns an rzp_test_ key id (the browser only
+  learns the key id from createOrder), a Payments history list (amount/status/date), deposits render '+' via the
+  existing `txSign` type map. The browser never writes balances or payments. 33 new tests
+  (tests/walletPayments.test.jsx 27, tests/walletPaymentsOff.test.jsx 2, apiClient +4); full suite 319 passing,
+  lint clean, build OK. No Razorpay npm package. Not verified against a real Razorpay test checkout yet.
 - All entries are free and all wallet balances are 0 so far. No payment gateway is live (payments flags are OFF).
 
 ## Open items (in priority order)
-1. Razorpay wallet top-up, TEST MODE first: R1 server code is written (see Feature status); next R2 = Wallet 'Add money' UI
-   behind `VITE_FEATURE_PAYMENTS`/`ENABLE_PAYMENTS`, then R3 = hardening/docs. Live mode only after the owner confirms Razorpay
+1. Razorpay wallet top-up, TEST MODE first: R1 server + R2 wallet UI are written (see Feature status); next R3 =
+   hardening/docs, then the OWNER sets test keys + registers the webhook in Vercel/Razorpay, enables
+   `ENABLE_PAYMENTS`/`VITE_FEATURE_PAYMENTS`, and runs the test-mode smoke test. Live mode only after the owner confirms Razorpay
    approval and a legal check. The Razorpay account is SHARED with another website the owner runs: the account-level webhook
    will also deliver that site's payments (they hit 'Unknown order' here, which is harmless and only logged), and this site's
    payments will reach that site's webhook (the owner must check that it ignores unknown orders).

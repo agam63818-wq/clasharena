@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, MotionConfig } from 'framer-motion';
 import {
   Shield, ArrowLeft,
@@ -650,7 +650,12 @@ export default function App() {
             )}
             {currentView === 'wallet' && (
               <motion.div key="wallet" variants={pageVariants} initial="initial" animate="animate" exit="exit">
-                <WalletView balance={userProfile?.balance || 0} userId={session.user.id} />
+                <WalletView
+                  balance={userProfile?.balance || 0}
+                  userId={session.user.id}
+                  displayName={user.name}
+                  onProfileUpdate={() => fetchProfile(session.user.id)}
+                />
               </motion.div>
             )}
             {currentView === 'profile' && (
@@ -1411,7 +1416,262 @@ const WALLET_REQUEST_STATUS = {
   rejected: { label: 'Rejected', className: 'badge--cancelled' }
 };
 
-function WalletView({ balance, userId }) {
+// Status labels for Razorpay top-ups (payments table, via /api/payments).
+const PAYMENT_STATUS = {
+  created: { label: 'Pending', className: 'badge--upcoming' },
+  credited: { label: 'Credited', className: 'badge--open' },
+  failed: { label: 'Failed', className: 'badge--full' }
+};
+
+// --- Razorpay wallet top-up (deposit only) ---------------------------------
+// Everything below runs only behind features.payments (VITE_FEATURE_PAYMENTS)
+// and the server's ENABLE_PAYMENTS flag. The browser never writes balances or
+// payments, and NEVER treats the Razorpay Checkout handler as proof of
+// payment: a top-up is shown as successful only after the server's verify
+// action reports credited / already_credited, or the Payments list shows the
+// webhook credited it.
+
+export const TOPUP_MIN_RUPEES = 10;
+export const TOPUP_MAX_RUPEES = 5000;
+export const TOPUP_AMOUNT_CHIPS = [50, 100, 200, 500];
+export const RAZORPAY_CHECKOUT_SRC = 'https://checkout.razorpay.com/v1/checkout.js';
+export const TOPUP_POLL_ATTEMPTS = 4;
+export const TOPUP_POLL_INTERVAL_MS = 2000;
+
+// Whole rupees only, same limits as the server (api/payments.js).
+export function parseTopupAmount(value) {
+  const message = `Enter a whole-rupee amount between ${formatINR(TOPUP_MIN_RUPEES)} and ${formatINR(TOPUP_MAX_RUPEES)}.`;
+  const raw = typeof value === 'number' ? String(value) : String(value ?? '').trim();
+  if (!/^[0-9]+$/.test(raw)) return { amountRupees: null, error: message };
+  const amountRupees = Number(raw);
+  if (!Number.isSafeInteger(amountRupees) || amountRupees < TOPUP_MIN_RUPEES || amountRupees > TOPUP_MAX_RUPEES) {
+    return { amountRupees: null, error: message };
+  }
+  return { amountRupees, error: '' };
+}
+
+export function isTestModeKey(keyId) {
+  return typeof keyId === 'string' && keyId.startsWith('rzp_test_');
+}
+
+let checkoutScriptPromise = null;
+let checkoutScriptDocument = null;
+// Remembered for the rest of the SPA session so re-opening the wallet after a
+// first order can show the TEST MODE banner immediately.
+let topupTestModeSeen = false;
+
+// Loads Razorpay Checkout on demand, at most once per page. A failed load
+// clears the cache so a later tap can retry.
+export function loadRazorpayCheckout(doc = globalThis.document, win = globalThis.window) {
+  if (win && typeof win.Razorpay === 'function') return Promise.resolve(win.Razorpay);
+  if (checkoutScriptPromise && checkoutScriptDocument === doc) return checkoutScriptPromise;
+  if (!doc || typeof doc.createElement !== 'function' || !(doc.head || doc.body)) {
+    return Promise.reject(new Error('Could not load the payment window. Please try again.'));
+  }
+  checkoutScriptDocument = doc;
+  checkoutScriptPromise = new Promise((resolve, reject) => {
+    const script = doc.createElement('script');
+    script.src = RAZORPAY_CHECKOUT_SRC;
+    script.async = true;
+    script.onload = () => {
+      if (win && typeof win.Razorpay === 'function') {
+        resolve(win.Razorpay);
+        return;
+      }
+      checkoutScriptPromise = null;
+      checkoutScriptDocument = null;
+      reject(new Error('Could not load the payment window. Please try again.'));
+    };
+    script.onerror = () => {
+      checkoutScriptPromise = null;
+      checkoutScriptDocument = null;
+      reject(new Error('Could not load the payment window. Please try again.'));
+    };
+    (doc.head || doc.body).appendChild(script);
+  });
+  return checkoutScriptPromise;
+}
+
+// Opens Razorpay Checkout for a server-created order. Resolves with the raw
+// handler response (which still has to be verified by our server) or with a
+// dismissal — never with "success".
+export function openRazorpayCheckout({ RazorpayCtor, order, displayName = '' }) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (value) => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+    try {
+      const checkout = new RazorpayCtor({
+        key: order.keyId,
+        order_id: order.orderId,
+        amount: order.amountPaise,
+        currency: order.currency || 'INR',
+        name: 'ClashArena',
+        description: 'Wallet top-up',
+        prefill: { name: displayName || '' },
+        handler: (response) => settle({ outcome: 'handler', response }),
+        modal: { ondismiss: () => settle({ outcome: 'dismissed' }) }
+      });
+      checkout.open();
+    } catch {
+      reject(new Error('Could not open the payment window. No money was charged. Please try again.'));
+    }
+  });
+}
+
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// After a 'pending' verify the webhook may credit a moment later. Poll the
+// caller's Payments list and report a credit only when a payment row that was
+// NOT already credited before this top-up now shows 'credited'.
+export async function pollForCreditedPayment({
+  listPaymentsFn,
+  knownCreditedIds = null,
+  attempts = TOPUP_POLL_ATTEMPTS,
+  intervalMs = TOPUP_POLL_INTERVAL_MS,
+  sleep = sleepMs,
+  onPayments,
+  onPoll
+}) {
+  let lastPayments = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await sleep(intervalMs);
+    if (onPoll) onPoll();
+    try {
+      const result = await listPaymentsFn();
+      const payments = (result && result.payments) || [];
+      lastPayments = payments;
+      if (onPayments) onPayments(payments);
+      if (knownCreditedIds) {
+        const found = payments.find(p => p && p.status === 'credited' && !knownCreditedIds.has(p.id));
+        if (found) return { credited: true, payment: found, payments };
+      }
+    } catch {
+      // Keep polling: a transient failure must not turn into a fake result.
+    }
+  }
+  return { credited: false, payment: null, payments: lastPayments };
+}
+
+// Full top-up flow: createOrder -> load Checkout -> open it -> server verify
+// -> poll only when the server says 'pending'. Returns a discriminated
+// outcome; status 'credited'/'already_credited' is possible ONLY from the
+// server's verify verdict or a polled Payments list credit.
+export async function startWalletTopup({
+  amountRupees,
+  displayName = '',
+  knownCreditedIds = null,
+  apiClient = api,
+  loadCheckout = () => loadRazorpayCheckout(),
+  openCheckout = openRazorpayCheckout,
+  sleep = sleepMs,
+  onPhase,
+  onKeyId,
+  onPayments,
+  onPoll
+}) {
+  const parsed = parseTopupAmount(amountRupees);
+  if (parsed.error) return { status: 'error', stage: 'validation', message: parsed.error };
+  const phase = (next) => { if (onPhase) onPhase(next); };
+
+  phase('creating');
+  let order;
+  try {
+    order = await apiClient.createPaymentOrder({ amountRupees: parsed.amountRupees });
+  } catch (err) {
+    return {
+      status: 'error',
+      stage: 'createOrder',
+      message: (err && err.message) || 'Could not start the payment. Please try again.',
+      httpStatus: err && err.status
+    };
+  }
+  if (!order || !order.orderId || !order.keyId || !Number.isInteger(order.amountPaise)) {
+    return { status: 'error', stage: 'createOrder', message: 'Could not start the payment. Please try again.' };
+  }
+  const base = { keyId: order.keyId, testMode: isTestModeKey(order.keyId) };
+  if (onKeyId) onKeyId(order.keyId);
+
+  phase('opening');
+  let RazorpayCtor;
+  try {
+    RazorpayCtor = await loadCheckout();
+  } catch {
+    return {
+      ...base,
+      status: 'error',
+      stage: 'script',
+      message: 'Could not load the payment window. Check your connection and try again. No money was charged.'
+    };
+  }
+
+  let opened;
+  try {
+    opened = await openCheckout({ RazorpayCtor, order, displayName });
+  } catch (err) {
+    return {
+      ...base,
+      status: 'error',
+      stage: 'checkout',
+      message: (err && err.message) || 'Could not open the payment window. No money was charged. Please try again.'
+    };
+  }
+  if (!opened || opened.outcome === 'dismissed') {
+    return { ...base, status: 'dismissed' };
+  }
+
+  phase('verifying');
+  const response = opened.response || {};
+  let verdict;
+  try {
+    verdict = await apiClient.verifyPayment({
+      razorpay_order_id: response.razorpay_order_id,
+      razorpay_payment_id: response.razorpay_payment_id,
+      razorpay_signature: response.razorpay_signature
+    });
+  } catch (err) {
+    return {
+      ...base,
+      status: 'error',
+      stage: 'verify',
+      message: (err && err.message) || 'We could not confirm this payment. If money was deducted, contact support.',
+      httpStatus: err && err.status
+    };
+  }
+
+  if (verdict && verdict.status === 'credited') {
+    return { ...base, status: 'credited', balance: verdict.balance, via: 'verify' };
+  }
+  if (verdict && verdict.status === 'already_credited') {
+    return { ...base, status: 'already_credited', balance: verdict.balance, via: 'verify' };
+  }
+
+  if (verdict && verdict.status === 'pending') {
+    phase('confirming');
+    const polled = await pollForCreditedPayment({
+      listPaymentsFn: () => apiClient.listPayments(),
+      knownCreditedIds,
+      sleep,
+      onPayments,
+      onPoll
+    });
+    if (polled.credited) return { ...base, status: 'credited', via: 'poll' };
+    return { ...base, status: 'pending' };
+  }
+
+  return {
+    ...base,
+    status: 'error',
+    stage: 'verify',
+    message: 'We could not confirm this payment. If money was deducted, contact support.'
+  };
+}
+
+export function WalletView({ balance, userId, displayName = '', onProfileUpdate }) {
   const [transactions, setTransactions] = useState([]);
   // loading | ready | unavailable | error — honest states (permanent rule 7)
   const [txState, setTxState] = useState('loading');
@@ -1431,6 +1691,21 @@ function WalletView({ balance, userId }) {
   const [requestError, setRequestError] = useState('');
   const [submittingRequest, setSubmittingRequest] = useState(false);
   const [requestFeedback, setRequestFeedback] = useState('');
+
+  // --- Razorpay top-up -------------------------------------------------------
+  // Client flag (features.payments) decides whether the UI exists; the server
+  // flag (ENABLE_PAYMENTS) decides whether it can actually work. Nothing here
+  // writes balances or payments — it only starts orders and reads status.
+  const [paymentsList, setPaymentsList] = useState([]);
+  const [paymentsListState, setPaymentsListState] = useState(features.payments ? 'loading' : 'off');
+  const [paymentsMessage, setPaymentsMessage] = useState('');
+  const [topupAmount, setTopupAmount] = useState('100');
+  const [topupError, setTopupError] = useState('');
+  // idle | creating | opening | verifying | confirming
+  const [topupPhase, setTopupPhase] = useState('idle');
+  const [topupMessage, setTopupMessage] = useState(null); // { kind, text }
+  const [isTestMode, setIsTestMode] = useState(topupTestModeSeen);
+  const topupInFlightRef = useRef(false);
 
   const refetch = () => {
     if (!features.walletTransactions) {
@@ -1496,8 +1771,42 @@ function WalletView({ balance, userId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, txPage]);
 
+  const loadPayments = () => {
+    if (!features.payments) {
+      setPaymentsListState('off');
+      return;
+    }
+    setPaymentsListState('loading');
+    setPaymentsMessage('');
+    api.listPayments()
+      .then((result) => {
+        setPaymentsList((result && result.payments) || []);
+        setPaymentsListState('ready');
+      })
+      .catch((err) => {
+        // 503 = payments are not enabled on the server. Say so and disable the
+        // top-up controls rather than pretending they work (permanent rule 7).
+        if (err && err.status === 503) {
+          setPaymentsMessage(err.message);
+          setPaymentsListState('unavailable');
+          return;
+        }
+        if (err && err.status === 401) {
+          setPaymentsMessage('Your session expired. Please log in again.');
+          setPaymentsListState('unavailable');
+          return;
+        }
+        setPaymentsMessage((err && err.message) || 'Could not load your payments right now.');
+        setPaymentsListState('error');
+      });
+  };
+
   useEffect(() => {
     loadRequests();
+  }, [userId]);
+
+  useEffect(() => {
+    loadPayments();
   }, [userId]);
 
   useEffect(() => {
@@ -1555,10 +1864,96 @@ function WalletView({ balance, userId }) {
     }
   };
 
+  const refreshWalletData = () => {
+    if (onProfileUpdate) onProfileUpdate();
+    setTxPage(1);
+    // refetch() reads the current page; if the page changed, the txPage
+    // effect refetches page 1 right after — either way the list re-reads.
+    refetch();
+    loadPayments();
+  };
+
+  const handleAddMoney = async () => {
+    // Synchronous ref guard + disabled controls: a double tap must never
+    // create two orders.
+    if (topupInFlightRef.current) return;
+    const parsed = parseTopupAmount(topupAmount);
+    if (parsed.error) {
+      setTopupError(parsed.error);
+      setTopupMessage(null);
+      return;
+    }
+    setTopupError('');
+    setTopupMessage(null);
+    topupInFlightRef.current = true;
+    setTopupPhase('creating');
+    // Snapshot of already-credited payment rows, so a 'pending' verify can
+    // only become success when a NEW row is credited (see pollForCreditedPayment).
+    const knownCreditedIds = paymentsListState === 'ready'
+      ? new Set(paymentsList.filter(p => p.status === 'credited').map(p => p.id))
+      : null;
+    try {
+      const outcome = await startWalletTopup({
+        amountRupees: parsed.amountRupees,
+        displayName,
+        knownCreditedIds,
+        onPhase: setTopupPhase,
+        onKeyId: (keyId) => {
+          const testMode = isTestModeKey(keyId);
+          topupTestModeSeen = testMode;
+          setIsTestMode(testMode);
+        },
+        onPayments: (next) => {
+          setPaymentsList(next);
+          setPaymentsListState('ready');
+        },
+        onPoll: () => { if (onProfileUpdate) onProfileUpdate(); }
+      });
+
+      if (outcome.status === 'credited') {
+        setTopupMessage({ kind: 'success', text: 'Money added. Your wallet balance has been updated.' });
+        refreshWalletData();
+      } else if (outcome.status === 'already_credited') {
+        setTopupMessage({ kind: 'success', text: 'This payment was already added to your wallet. Your balance is up to date.' });
+        refreshWalletData();
+      } else if (outcome.status === 'pending') {
+        setTopupMessage({
+          kind: 'info',
+          text: 'Payment received, confirming... We have not confirmed it yet. Do not pay again — check your balance and the Payments list again in a minute. Contact support if money was deducted.'
+        });
+        refreshWalletData();
+      } else if (outcome.status === 'dismissed') {
+        setTopupMessage({ kind: 'info', text: 'Payment window closed. No money was charged and your balance did not change.' });
+        loadPayments();
+      } else {
+        setTopupMessage({ kind: 'error', text: outcome.message || 'Payment could not be completed. Please try again.' });
+        if (outcome.httpStatus === 503) {
+          setPaymentsMessage(outcome.message);
+          setPaymentsListState('unavailable');
+        } else {
+          loadPayments();
+        }
+      }
+    } finally {
+      topupInFlightRef.current = false;
+      setTopupPhase('idle');
+    }
+  };
+
   // No payment provider and no request backend: buttons stay disabled with an
   // honest label — no fake UPI/WhatsApp instructions (permanent rule 4).
   const requestsReady = features.walletRequests && (requestsState === 'ready' || requestsState === 'loading' || requestsState === 'error');
   const requestsUnavailable = features.walletRequests && requestsState === 'unavailable';
+  const paymentsUnavailable = features.payments && paymentsListState === 'unavailable';
+  const topupBusy = topupPhase !== 'idle';
+  const selectedTopupAmount = parseTopupAmount(topupAmount).amountRupees;
+  const topupButtonLabel = topupPhase === 'creating'
+    ? 'Starting…'
+    : topupPhase === 'opening'
+      ? 'Opening Razorpay…'
+      : (topupPhase === 'verifying' || topupPhase === 'confirming')
+        ? 'Confirming payment…'
+        : 'Add Money';
   const pages = totalPages(txTotal);
 
   return (
@@ -1570,15 +1965,70 @@ function WalletView({ balance, userId }) {
       >
         <p style={{ color: 'var(--text-secondary)' }}>Total Balance</p>
         <p style={{ color: 'var(--gold)', fontSize: 'var(--text-4xl)', fontWeight: 'var(--weight-black)', margin: 'var(--space-2) 0' }}>{formatINR(balance)}</p>
+        {features.payments && (
+          <div style={{ marginTop: 'var(--space-5)', textAlign: 'left' }}>
+            {isTestMode && (
+              <p
+                role="status"
+                style={{ background: 'var(--warning-soft)', border: '1px solid var(--warning-border)', color: 'var(--warning-text)', borderRadius: 'var(--radius-md)', padding: 'var(--space-3)', fontWeight: 'var(--weight-bold)', textAlign: 'center', marginBottom: 'var(--space-3)' }}
+              >
+                TEST MODE - no real money
+              </p>
+            )}
+            <div role="group" aria-label="Choose a top-up amount" style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
+              {TOPUP_AMOUNT_CHIPS.map(chip => (
+                <button
+                  key={chip}
+                  type="button"
+                  className={`btn ${selectedTopupAmount === chip ? 'btn-primary' : 'btn-ghost'} btn--sm`}
+                  aria-pressed={selectedTopupAmount === chip}
+                  disabled={topupBusy || paymentsUnavailable}
+                  onClick={() => { setTopupAmount(String(chip)); setTopupError(''); }}
+                  style={{ flex: '1 1 64px', minHeight: 44 }}
+                >
+                  {formatINR(chip)}
+                </button>
+              ))}
+            </div>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label className="field-label" htmlFor="topup-amount">Amount (INR)</label>
+              <input
+                id="topup-amount"
+                className="input"
+                type="number"
+                inputMode="numeric"
+                min={TOPUP_MIN_RUPEES}
+                max={TOPUP_MAX_RUPEES}
+                step="1"
+                value={topupAmount}
+                onChange={e => { setTopupAmount(e.target.value); if (topupError) setTopupError(''); }}
+                disabled={topupBusy || paymentsUnavailable}
+                aria-invalid={!!topupError}
+                aria-describedby={topupError ? 'topup-amount-error' : 'topup-amount-hint'}
+              />
+              <p className="field-hint" id="topup-amount-hint">
+                Whole rupees only, between {formatINR(TOPUP_MIN_RUPEES)} and {formatINR(TOPUP_MAX_RUPEES)}.
+              </p>
+              {topupError && (
+                <p className="field-error" id="topup-amount-error" role="alert">
+                  <AlertCircle size={13} aria-hidden="true" /> {topupError}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 'var(--space-3)', marginTop: 'var(--space-5)' }}>
           <button
             type="button"
             className="btn btn-primary"
-            disabled={!requestsReady}
-            onClick={() => openRequest('deposit')}
-            aria-label={features.walletRequests ? 'Request a deposit' : 'Add money — coming soon'}
+            disabled={features.payments ? (topupBusy || paymentsUnavailable) : !requestsReady}
+            onClick={features.payments ? handleAddMoney : () => openRequest('deposit')}
+            aria-label={features.payments ? 'Add money with Razorpay' : features.walletRequests ? 'Request a deposit' : 'Add money — coming soon'}
           >
-            Add Money {!features.walletRequests && <span className="visually-hidden">(coming soon)</span>}
+            {features.payments && topupBusy && <Loader size={16} className="spin" aria-hidden="true" />}
+            {features.payments
+              ? topupButtonLabel
+              : <>Add Money {!features.walletRequests && <span className="visually-hidden">(coming soon)</span>}</>}
           </button>
           <button
             type="button"
@@ -1590,11 +2040,50 @@ function WalletView({ balance, userId }) {
             Withdraw {!features.walletRequests && <span className="visually-hidden">(coming soon)</span>}
           </button>
         </div>
-        {!features.walletRequests && (
+        {!features.walletRequests && !features.payments && (
           <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
             Online payments are coming soon. Buttons are disabled until then.
           </p>
         )}
+        {features.payments && !paymentsUnavailable && (
+          <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
+            Pay securely with Razorpay. Your balance updates only after our server confirms the payment. Withdrawals are not available yet.
+          </p>
+        )}
+        {paymentsUnavailable && (
+          <p className="feedback feedback--error" role="status" style={{ marginTop: 'var(--space-4)', textAlign: 'left' }}>
+            <AlertCircle size={16} aria-hidden="true" /> {paymentsMessage}
+          </p>
+        )}
+        <div aria-live="polite">
+          {features.payments && topupPhase === 'verifying' && (
+            <p role="status" style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+              Confirming your payment with our server…
+            </p>
+          )}
+          {features.payments && topupPhase === 'confirming' && (
+            <p role="status" style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+              Payment received, confirming...
+            </p>
+          )}
+          {topupMessage && (
+            <p
+              className={`feedback ${topupMessage.kind === 'success' ? 'feedback--success' : topupMessage.kind === 'error' ? 'feedback--error' : ''}`}
+              role={topupMessage.kind === 'error' ? 'alert' : 'status'}
+              style={{
+                marginTop: 'var(--space-4)',
+                textAlign: 'left',
+                ...(topupMessage.kind === 'info'
+                  ? { background: 'var(--info-soft)', border: '1px solid var(--info-border)', color: 'var(--info-text)' }
+                  : {})
+              }}
+            >
+              {topupMessage.kind === 'success'
+                ? <CheckCircle2 size={16} aria-hidden="true" />
+                : <AlertCircle size={16} aria-hidden="true" />} {topupMessage.text}
+            </p>
+          )}
+        </div>
         {requestsReady && (
           <p style={{ marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
             Requests are reviewed by an admin. Submitting one never changes your balance — only an approval does.
@@ -1650,6 +2139,44 @@ function WalletView({ balance, userId }) {
         </section>
       )}
 
+      {features.payments && paymentsListState !== 'unavailable' && (
+        <section className="section" aria-label="Payments">
+          <div className="section-header"><h3>Payments</h3></div>
+          {paymentsListState === 'loading' && (
+            <div role="status" aria-label="Loading payments" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+              {[0, 1].map(i => (
+                <span key={i} className="skeleton" style={{ display: 'block', height: 58, borderRadius: 'var(--radius-md)' }} />
+              ))}
+            </div>
+          )}
+          {paymentsListState === 'error' && (
+            <ErrorRetry message={paymentsMessage || 'Could not load your payments right now.'} onRetry={loadPayments} />
+          )}
+          {paymentsListState === 'ready' && paymentsList.length === 0 && (
+            <EmptyState icon={Wallet} title="No payments yet" hint="Wallet top-ups you make with Razorpay will be listed here with their status." />
+          )}
+          {paymentsListState === 'ready' && paymentsList.length > 0 && (
+            <ul style={{ listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+              {paymentsList.map(payment => {
+                const meta = PAYMENT_STATUS[payment.status] || { label: payment.status, className: 'badge--unknown' };
+                return (
+                  <li key={payment.id} style={{ background: 'var(--bg-surface)', padding: 'var(--space-3) var(--space-4)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 'var(--weight-semibold)' }}>Wallet top-up</span>
+                      <span className={`badge ${meta.className}`}>{meta.label}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', marginTop: 4 }}>
+                      <small style={{ color: 'var(--text-muted)' }}>{formatDateTime(payment.created_at)}</small>
+                      <span style={{ fontWeight: 'var(--weight-bold)' }}>{formatINR((Number(payment.amount_paise) || 0) / 100)}</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      )}
+
       <section className="section" aria-label="Transaction history">
         <div className="section-header"><h3>Transactions</h3></div>
         {txState === 'loading' && (
@@ -1666,7 +2193,7 @@ function WalletView({ balance, userId }) {
           <ErrorRetry message="Could not load your transactions right now." onRetry={refetch} />
         )}
         {txState === 'ready' && transactions.length === 0 && (
-          <EmptyState icon={FileText} title="No transactions yet" hint="Entry fees you pay for matches will appear here." />
+          <EmptyState icon={FileText} title="No transactions yet" hint="Entry fees and wallet top-ups will appear here." />
         )}
         {txState === 'ready' && transactions.length > 0 && (
           <>

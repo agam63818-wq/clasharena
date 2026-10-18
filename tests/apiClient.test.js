@@ -239,6 +239,73 @@ describe('src/lib/apiClient.js', () => {
     expect(err.message).toMatch(/requires database setup/i);
   });
 
+  it('creates a payment order through /api/payments sending only the rupee amount', async () => {
+    const fetchSpy = vi.fn(async () => new Response(
+      JSON.stringify({ orderId: 'order_1', amountPaise: 10000, currency: 'INR', keyId: 'rzp_test_abc' }),
+      { status: 200 }
+    ));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await api.createPaymentOrder({ amountRupees: 100 });
+
+    expect(result).toEqual({ orderId: 'order_1', amountPaise: 10000, currency: 'INR', keyId: 'rzp_test_abc' });
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe('/api/payments');
+    expect(init.headers.Authorization).toBe('Bearer tok-123');
+    // no userId, no paise, no currency — the server derives all of those
+    expect(JSON.parse(init.body)).toEqual({ action: 'createOrder', amountRupees: 100 });
+  });
+
+  it('verify sends exactly the three Razorpay confirmation values', async () => {
+    const fetchSpy = vi.fn(async () => new Response(
+      JSON.stringify({ status: 'credited', balance: 250 }),
+      { status: 200 }
+    ));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await api.verifyPayment({
+      razorpay_order_id: 'order_1',
+      razorpay_payment_id: 'pay_1',
+      razorpay_signature: 'sig_1'
+    });
+
+    expect(result).toEqual({ status: 'credited', balance: 250 });
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe('/api/payments');
+    // no amount/balance/userId — the browser cannot assert what was paid
+    expect(JSON.parse(init.body)).toEqual({
+      action: 'verify',
+      razorpay_order_id: 'order_1',
+      razorpay_payment_id: 'pay_1',
+      razorpay_signature: 'sig_1'
+    });
+  });
+
+  it('lists payments through the same token-authenticated route', async () => {
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ payments: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await api.listPayments();
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe('/api/payments');
+    expect(init.headers.Authorization).toBe('Bearer tok-123');
+    expect(JSON.parse(init.body)).toEqual({ action: 'listPayments' });
+  });
+
+  it('surfaces the honest 503 when payments are not enabled on the server', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ error: 'Payments are not enabled.' }), { status: 503 }))
+    );
+
+    const err = await api.createPaymentOrder({ amountRupees: 100 }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(503);
+    expect(err.message).toBe('Payments are not enabled.');
+  });
+
   it('turns a network failure into ApiError status 0 with an honest message', async () => {
     vi.stubGlobal(
       'fetch',

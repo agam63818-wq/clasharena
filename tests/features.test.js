@@ -10,7 +10,7 @@ describe('src/config/features.js — safe defaults', () => {
     expect(features.walletTransactions).toBe(true);
   });
 
-  it('payments defaults OFF — no payment provider is integrated yet (rule 4)', () => {
+  it('payments defaults OFF — Razorpay top-up stays off until the owner enables both flags (rule 4/7)', () => {
     expect(features.payments).toBe(false);
   });
 

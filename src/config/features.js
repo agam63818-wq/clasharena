@@ -23,10 +23,12 @@ export const features = {
   // message if the DB piece is missing.
   walletTransactions: env.VITE_FEATURE_WALLET_TRANSACTIONS !== 'false',
 
-  // NO payment provider is integrated yet. Must stay false until a real
-  // flow exists — wallet buttons render disabled with an honest label
-  // meanwhile (permanent rule 4: no fake payments, no invented UPI IDs or
-  // WhatsApp numbers).
+  // Razorpay wallet top-up (deposit only): the server routes
+  // (api/payments.js + api/razorpayWebhook.js) and the Wallet "Add money"
+  // UI exist, but the feature stays OFF until the OWNER sets BOTH this flag
+  // AND the server flag ENABLE_PAYMENTS=true with Razorpay keys configured
+  // in Vercel (test mode first). While off, the wallet keeps the honest
+  // "coming soon" state (permanent rule 4: no fake payments).
   payments: isTrue(env.VITE_FEATURE_PAYMENTS),
 
   // Deposit / withdraw REQUESTS (no gateway): users ask, an admin approves,

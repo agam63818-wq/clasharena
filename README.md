@@ -89,6 +89,10 @@ secret here.**
 | `WALLET_REQUESTS_PER_HOUR` | Per-user hourly cap (default 5) |
 | `ENABLE_TOURNAMENT_CANCELLATION` | Cancellation-with-refunds switch |
 | `ENABLE_TOURNAMENT_RESULTS` | Tournament-results RPC switch (default on; set `false` to disable) |
+| `ENABLE_PAYMENTS` | Razorpay wallet top-up kill switch (default off) |
+| `RAZORPAY_KEY_ID` | Razorpay key id (owner-set in Vercel; test mode first) |
+| `RAZORPAY_KEY_SECRET` | Razorpay key secret — server only, never in client code |
+| `RAZORPAY_WEBHOOK_SECRET` | Razorpay webhook signing secret — server only |
 
 ## 6. Feature flags (permanent rule 7)
 
@@ -98,7 +102,8 @@ otherwise the feature degrades gracefully with an honest message.
 
 | Flag | Read by | What it turns on | Required DB object / provider | Safe default |
 |---|---|---|---|---|
-| `VITE_FEATURE_PAYMENTS` | client — `features.payments` | Real add-money / withdraw flow | A payment provider **and** a server-side transaction write path — neither exists (docs/AUDIT.md P1-6) | **`false`** — wallet buttons stay disabled |
+| `VITE_FEATURE_PAYMENTS` | client — `features.payments` | Razorpay wallet top-up ("Add money", deposit only — no withdrawals) | Deployed `payments` table + `credit_payment()` RPC and the server flag below. Owner enables both flags in Vercel (test mode first) | **`false`** — wallet keeps the honest "coming soon" state |
+| `ENABLE_PAYMENTS` | server — `api/payments.js`, `api/razorpayWebhook.js` | Kill switch for the whole Razorpay top-up flow | Same objects as above + `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET`/`RAZORPAY_WEBHOOK_SECRET` set in Vercel. While off, every payment route answers 503 and **no money can move** | **`false`** |
 | `VITE_FEATURE_WALLET_TRANSACTIONS` | client — `features.walletTransactions` | Wallet transaction history | Existing `transactions` table + RLS `user_id = auth.uid()` | **`true`** |
 | `VITE_FEATURE_WALLET_REQUESTS` | client — `features.walletRequests` | Deposit/withdraw request form + request list | `wallet_requests` (RLS: own rows, insert/select only) + `approve_wallet_request`/`reject_wallet_request` — `005_wallet_requests.sql`. **Not applied.** Also needs the server flag below | **`false`** |
 | `ENABLE_WALLET_REQUESTS` | server — `api/wallet.js`, `api/admin.js` | Kill switch for the whole wallet-request flow | Same objects as above. While off, every wallet action answers 503 and **no money can move** | **`false`** |
@@ -209,9 +214,11 @@ in the shipped bundle.
   completed-match standings.
 - Joins on the legacy path are **not atomic** (documented; mitigated by an
   optimistic lock + compensating refund, not eliminated).
-- There is **no payment gateway**; wallet requests are a manual,
-  admin-approved ledger. The UPI ID shown in the UI is display-only and is never
-  used to verify payments.
+- The Razorpay wallet top-up code exists (server routes + wallet UI) but is
+  **not live**: `ENABLE_PAYMENTS`/`VITE_FEATURE_PAYMENTS` stay off until the
+  owner configures test-mode keys and enables them. Wallet requests remain a
+  manual, admin-approved ledger. The UPI ID shown in the UI is display-only and
+  is never used to verify payments.
 - `src/pages/Terms.jsx` is placeholder policy text that needs owner/legal review
   and contains at least one claim (payments) the app does not fulfil.
 - Test coverage is unit/route-level with a mocked Supabase. There are no

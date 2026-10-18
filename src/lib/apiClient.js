@@ -123,5 +123,22 @@ export const api = {
     request('/api/wallet', { body: { action: 'createWalletRequest', type, amount, reference, note } }),
 
   listWalletRequests: ({ perPage } = {}) =>
-    request('/api/wallet', { body: { action: 'listWalletRequests', perPage } })
+    request('/api/wallet', { body: { action: 'listWalletRequests', perPage } }),
+
+  // --- Razorpay wallet top-up (api/payments.js) ----------------------------
+  // Deposit only. The browser never sends userId, paise or currency: identity
+  // comes from the session token and amounts/ids come from Razorpay's own
+  // responses server-side. A Checkout success callback is NEVER treated as
+  // proof of payment — balance changes only after `verifyPayment` (or the
+  // webhook) credits through the server's credit_payment() RPC.
+  createPaymentOrder: ({ amountRupees }) =>
+    request('/api/payments', { body: { action: 'createOrder', amountRupees } }),
+
+  verifyPayment: ({ razorpay_order_id, razorpay_payment_id, razorpay_signature }) =>
+    request('/api/payments', {
+      body: { action: 'verify', razorpay_order_id, razorpay_payment_id, razorpay_signature }
+    }),
+
+  listPayments: () =>
+    request('/api/payments', { body: { action: 'listPayments' } })
 };

@@ -1,5 +1,7 @@
 -- ============================================================================
 -- NOT APPLIED. For the database phase.
+-- OUTDATED - written for uuid ids.
+-- The live database was changed separately; do not apply.
 -- 003_functions_triggers.sql
 -- Atomic join RPC, room-details gate, profile column protection, count trigger.
 -- These close AUDIT P0-1, P0-2 (with the API change), P0-3, P0-4, P0-6.

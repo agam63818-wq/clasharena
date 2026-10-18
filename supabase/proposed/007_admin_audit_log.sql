@@ -1,5 +1,7 @@
 -- ============================================================================
 -- NOT APPLIED. For the database phase.
+-- OUTDATED - written for uuid ids.
+-- The live database was changed separately; do not apply.
 -- 007_admin_audit_log.sql
 -- admin_audit_log — an append-only record of every privileged action the
 -- admin router performs (api/admin.js): tournament create/update/cancel,

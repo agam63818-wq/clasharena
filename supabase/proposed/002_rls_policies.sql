@@ -1,5 +1,7 @@
 -- ============================================================================
 -- NOT APPLIED. For the database phase.
+-- OUTDATED - written for uuid ids.
+-- The live database was changed separately; do not apply.
 -- 002_rls_policies.sql
 -- Row Level Security for all four tables. The Supabase anon key is public
 -- (src/lib/supabaseClient.js), so RLS is the primary authorization layer.

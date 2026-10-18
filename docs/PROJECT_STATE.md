@@ -1,198 +1,114 @@
-# ClashArena — Project State
+# ClashArena - Project State (READ THIS FIRST in every new session)
 
-**Last updated:** 2026-10-17 (Asia/Kolkata)
+Last verified: 2026-10-17 (PR #10 merged, atomic join enabled, payments tables created, Razorpay R1 server code reviewed). The coding agent MUST update this file at
+the end of every task (what changed, flag values, open items) and commit it on the same branch.
 
-**Working branch:** `feat/razorpay-server` — a new branch cut from the latest
-`main` (`9b9abe2`, after the bigint fix in PR #10 was merged), created per the
-user's explicit instruction for the Razorpay wallet top-up release (part R1).
-The user has asked for PRs to be opened ONLY when they say so; this branch is
-pushed but has NO pull request yet.
+## How we work
+- Read `replit.md` (PERMANENT RULES), this file and `docs/DB_REQUIREMENTS.md` before doing anything.
+  Then write a 10-line summary of what you understood and WAIT for the task.
+- One part per branch, always created from the latest `main` (or the Arena-assigned branch). Do not merge. Push,
+  report real lint/build/test output, STOP.
+- The coding agent never writes or runs SQL and never touches Supabase. Database changes are made separately
+  (by Claude, through the Supabase connector) and listed here.
+- Never claim a test/build passed unless it was actually run. Never print or commit secrets.
 
-**History:** the bigint tournament-ID fix (branch `fix/bigint-tournament-ids`)
-was merged into `main` via PR #10. Its notes remain below under the bigint
-heading.
+## Stack and links
+- React + Vite frontend, Vercel serverless routes in `api/*`, Supabase (project `abnhblqclhbnzypswhot`).
+- Repo `agam63818-wq/clasharena`, Vercel project `clasharena`. Production is deployed from `main` (URL `clasharena-nine.vercel.app`).
+- Vercel PREVIEW deployments use the PRODUCTION Supabase. Never test with real users' money or data.
 
-## Mandatory new-session handoff
+## Live database (verified 2026-10-16)
+Tables: `profiles`, `tournaments`, `match_registrations`, `transactions`, `tournament_results`, `admin_audit_log`,
+`payments`, `payment_webhook_events`
+(+ schema `backup_20261014` = in-database snapshot taken before hardening; can be dropped once everything is trusted).
+- `tournaments.id` and `match_registrations.id` are bigint (NOT uuid). `tournaments.prize` is numeric(12,2).
+  `profiles.balance` is integer (whole rupees). `transactions.id` is uuid, `transactions.amount` is numeric (rupees).
+  `transactions.type` in (join, deposit, withdraw, refund, prize); `transactions.status` in (pending, completed, failed, reversed);
+  `transactions.reference` (text, nullable) links a deposit to its Razorpay payment id (unique for deposits).
+  NOTE: `transactions.user_id` is ON DELETE CASCADE to profiles; nobody can delete profiles from the browser, but never delete
+  a profile by hand without exporting its ledger.
+- `tournaments.status` allows: registration, upcoming, live, completed, cancelled.
+- Browser (anon / authenticated) can: read tournaments EXCEPT `room_id` and `room_password` (column-level SELECT grant),
+  read its OWN profile / registrations / transactions, and UPDATE only `profiles.ff_id`, `profiles.nickname`,
+  `profiles.avatar_url`. It cannot insert/delete profiles and cannot write tournaments, match_registrations,
+  transactions. A browser query with `select('*')` on tournaments now FAILS (permission denied) - always list columns.
+  If a new column is added to `tournaments` it needs an explicit `GRANT SELECT (col) ... TO anon, authenticated`.
+  Every other write goes through `api/*` with the service role after token verification.
+- Room credentials: players get them ONLY through `get_room_details(bigint)`; admins read/edit them through
+  `api/admin.js` (service role).
+- Triggers: `handle_new_user` (creates the profile at signup from signUp `options.data` username/phone; invalid or
+  duplicate values fall back safely), `block_balance_update` (non-service roles cannot change balance, role, is_admin,
+  level, wins, total_played), `trg_player_count_insert/delete` -> `update_player_count` (recomputes current_players).
+- Functions (all SECURITY DEFINER with a fixed search_path):
+  - `get_room_details(p_tournament_id bigint)` -> table(room_id, room_password); authenticated; registered players or admins.
+  - `admin_set_tournament_results(p_tournament_id bigint, p_admin_id uuid, p_results jsonb) -> jsonb {success, error}`;
+    service_role only; validates everything first, replaces results atomically, marks the tournament completed.
+  - `join_tournament(p_user_id uuid, p_tournament_id bigint, p_ff_uid text, p_ign text) -> json`; service_role only;
+    atomic (tournament row lock + profile row lock; capacity, duplicate, balance, registration, balance deduction and a
+    ledger row `type='join'`). Returns {success:true} or {error[, code:'23505']} with the messages api/joinTournament.js maps.
+    DB-tested with rolled-back transactions. ENABLED in production (JOIN_USE_RPC=true).
+  - `credit_payment(p_provider_order_id text, p_provider_payment_id text, p_amount_paise bigint, p_currency text,
+    p_event_id text default null) -> json {success, credited?, duplicate?, amount_rupees?, error?}`; service_role only.
+    The ONLY way a payment becomes wallet balance. Atomic + idempotent: looks up the `payments` row by order id (row lock),
+    returns {success:true, duplicate:true} if already credited, rejects with error 'Unknown order' / 'Currency mismatch' /
+    'Amount mismatch' / 'Payment already used' / 'Missing data' (nothing is credited in those cases), otherwise adds a
+    deposit ledger row (reference = payment id), increases profiles.balance and marks the payment `credited`.
+    p_event_id = Razorpay's event id header (webhook) or 'verify:<payment_id>' (client confirmation route).
+    DB-tested end to end in rolled-back transactions (wrong amount/currency, duplicates, same payment on two orders, join with the credited balance).
+- `tournament_results`: public SELECT only when the tournament is `completed`. No client writes.
+- `payments` (one row per Razorpay order; amounts in PAISE, whole-rupee amounts only, INR only, 100..10,000,000 paise;
+  status created|failed|credited; unique provider_order_id and provider_payment_id): the owner can SELECT own rows;
+  every write is service-role only. `payment_webhook_events`: server only (event-id idempotency log).
+- `admin_audit_log`: service role only (RLS on, no policies); `target_id` is TEXT. Writes from `api/_lib/audit.js` are best effort.
+- Constraints: non-negative entry_fee / prize / balance, max_players >= 1, role in (user, admin), unique
+  (tournament_id, user_id) registrations. NEW accounts (created from 2026-10-14) must have a unique phone and a
+  case-insensitively unique username. Older accounts were left untouched (two old accounts share a phone).
+- Migrations applied by Claude: clasharena_phase_a_00 .. _10 (snapshot, privilege lockdown, constraints/status,
+  signup trigger + room RPC, prize to numeric, results table, unique indexes for new accounts, results RPC contract +
+  audit log, room credential lockdown, atomic join, payments/credit_payment).
 
-Before any future task, read `replit.md`, this file, and
-`docs/DB_REQUIREMENTS.md`; then write a **10-line understanding summary** and
-wait for the user's task. Do not begin inspection, edits, commands, SQL, or a
-deployment before that task arrives.
+## NOT created in the database (do not call these)
+- `wallet_requests` table, wallet approve/reject RPCs, `cancel_tournament_with_refund`. The files in
+  `supabase/proposed/` (003, 005, 006) were written for uuid ids and must be REWRITTEN for bigint before they can be applied.
+- Therefore these flags must stay OFF / unset: `ENABLE_WALLET_REQUESTS`, `VITE_FEATURE_WALLET_REQUESTS`,
+  `ENABLE_TOURNAMENT_CANCELLATION`. Cancelling a tournament that has PAID registrations stays blocked.
+- Withdrawals / prize payouts / refunds to the wallet have no DB function yet (out of scope for the first Razorpay release).
 
-## Authoritative database facts
+## Flags (Vercel)
+- `VITE_FEATURE_ROOM_RPC` = true (production, preview, development) - room credentials only via the RPC.
+- `JOIN_USE_RPC` = true (production, preview): joins use the atomic `join_tournament` function. The legacy path stays in
+  the code as a fallback only (delete the variable + redeploy to revert).
+- Payments: `VITE_FEATURE_PAYMENTS` and `ENABLE_PAYMENTS` are NOT set (payments are OFF). Razorpay env vars
+  (`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`) are added by the OWNER in Vercel; never put secrets in code or chat.
+- Do not change flag values without an explicit instruction from the owner.
 
-The project owner supplied these deployed facts; they override UUID-era
-assumptions in code and proposed migrations:
+## Feature status
+- Done: tournament ids are bigint everywhere in the API/tests (PR #10), token-verified API routes, server-side admin router, signup with phone, phone required to join, prefilled
+  join form, My Matches -> match details, room credentials via RPC, admin edit/delete/cancel (no paid refunds), Completed
+  status, AM/PM time picker, admin sees player username/IGN/UID/phone, results (admin + player).
+- Razorpay R1 (server, branch feat/razorpay-server): `api/payments.js` (POST router: createOrder / verify / listPayments;
+  identity from the token, paise and ids from Razorpay's own responses, HMAC check with timingSafeEqual, then
+  `credit_payment`) and `api/razorpayWebhook.js` (raw-body HMAC with RAZORPAY_WEBHOOK_SECRET, bodyParser disabled; handles
+  payment.captured -> credit_payment and payment.failed -> payments.status 'failed' only if still 'created'; rejected credits
+  answer 200 and log ids only). 41 tests in tests/payments.test.js. Both answer 503 unless `ENABLE_PAYMENTS` is exactly 'true'.
+  Not verified in a real runtime yet: raw-body access on Vercel and the webhook signature with a real Razorpay test event.
+- All entries are free and all wallet balances are 0 so far. No payment gateway is live (payments flags are OFF).
 
-- `tournaments.id` and `match_registrations.id` are **bigint**. Tournament
-  foreign keys and tournament RPC parameters must be bigint-compatible.
-- `tournaments.prize` is **numeric(12,2)**.
-- The deployed results writer is
-  `admin_set_tournament_results(p_tournament_id bigint, p_admin_id uuid, p_results jsonb) -> jsonb {success, error}`.
-- Profile/user identities remain UUID. Phone numbers are private and must never
-  appear in ordinary player-facing profile or result data.
-- Result prizes are recorded standings only; wallet payouts remain manual.
+## Open items (in priority order)
+1. Razorpay wallet top-up, TEST MODE first: R1 server code is written (see Feature status); next R2 = Wallet 'Add money' UI
+   behind `VITE_FEATURE_PAYMENTS`/`ENABLE_PAYMENTS`, then R3 = hardening/docs. Live mode only after the owner confirms Razorpay
+   approval and a legal check. The Razorpay account is SHARED with another website the owner runs: the account-level webhook
+   will also deliver that site's payments (they hit 'Unknown order' here, which is harmless and only logged), and this site's
+   payments will reach that site's webhook (the owner must check that it ignores unknown orders).
+2. Add a real concurrency test for `join_tournament` before paid entries go live.
+3. Wallet requests / refunds-on-cancel / payouts: DB objects must be rewritten for bigint first.
+4. Owner tasks: enable leaked-password protection in Supabase Auth, review the 3 admin accounts, mark
+   `SUPABASE_SERVICE_ROLE_KEY` as Sensitive in Vercel.
+5. Known limitation: phone numbers are not OTP-verified.
+6. Supabase advisor notes that are intentional: RLS-without-policy on the backup tables and admin_audit_log;
+   get_room_details executable by authenticated (it checks registration/admin inside).
 
-## Current implementation and documentation work
-
-### Razorpay R1 — server (2026-10-17, this branch)
-
-Scope honored: wallet top-up deposits only (no withdrawals/payouts/refunds),
-test mode first, no new npm dependency (Node `crypto` + `fetch`), no SQL, no
-flag values changed. Exactly 2 functions added (project now has 7 of 12 on
-Vercel Hobby):
-
-- `api/payments.js` — one POST router (`createOrder` / `verify` /
-  `listPayments`). Every action runs behind `ENABLE_PAYMENTS !== 'true' → 503`
-  and `requireUser` (identity from the Bearer token only).
-  - `createOrder`: whole rupees 10–5000 (constants at top); Razorpay Orders
-    API with Basic auth; a `payments` row is written with the VERIFIED user,
-    Razorpay's own order id/amount, `status: 'created'`; rate limit of 5
-    created orders / 10 min per user → 429; responds
-    `{ orderId, amountPaise, currency, keyId }` — never the secret.
-  - `verify`: format checks (≤64 chars, alphanumeric+underscore) → order row
-    by `provider_order_id` with `user_id === verified user` (else 404) →
-    HMAC-SHA256 signature over `order|payment` via `timingSafeEqual` (bad →
-    400, nothing credited) → Razorpay payment GET; only `captured` proceeds
-    (`authorized` → `{ status: 'pending' }`), order/amount/currency must match
-    the recorded row using RAZORPAY'S values → `credit_payment` RPC with
-    `p_event_id: 'verify:<payment_id>'` → `{ status: 'credited' |
-    'already_credited' | 'pending', balance }`.
-  - `listPayments`: caller's last 20 payment rows.
-- `api/razorpayWebhook.js` — POST only, no user auth; body parser disabled
-  (`export const config = { api: { bodyParser: false } }`) and the raw stream
-  bytes are read, so the HMAC-SHA256 signature (header `x-razorpay-signature`)
-  is verified against exactly what Razorpay signed; JSON parsed only after the
-  check. `payment.captured` → `credit_payment` with the
-  `x-razorpay-event-id` header: success/duplicate → 200; 'Unknown order' /
-  'Amount mismatch' / 'Currency mismatch' / 'Payment already used' → 200 +
-  console.error with ids only; DB/transport error → 500 so Razorpay retries
-  (idempotent). `payment.failed` → `status: 'failed'` + short reason ONLY
-  where the order exists and `status = 'created'` (credited payments are
-  never touched). Any other event → 200 ignored.
-- `tests/payments.test.js` — 41 tests: flag off, missing keys, 401s, bad
-  amounts, client-supplied user_id/amount_paise/currency ignored, rate-limit
-  429, gateway 502s, other user's order 404, bad/tampered signature, not
-  captured / authorized / amount-currency mismatch, duplicate verify
-  (duplicate RPC verdict and already-credited row), listPayments user filter
-  and limit, webhook bad signature, raw-body tamper proof (re-serialized JSON
-  fails), valid captured credit with event id, duplicate event, unknown order,
-  amount mismatch logging, retry-on-500, failed-payment status filter, secret
-  never logged.
-
-The deployed `credit_payment(p_provider_order_id, p_provider_payment_id,
-p_amount_paise, p_currency, p_event_id)` RPC remains the ONLY path a payment
-becomes balance. Balance, transactions and payments.status are never written
-any other way here.
-
-### Bigint tournament-ID fix (2026-10-17, merged via PR #10)
-
-Prior arena-session work (signup/profile completion, admin tournament
-management, player match details, phone-required joining, results management)
-was merged into `main` via PR #9.
-
-This branch closes open item 1 below — the bigint application-compatibility
-gap that made every tournament-id route answer `400 "Invalid tournament."`:
-
-- `api/_lib/validate.js` `validateTournamentId` now accepts a positive integer
-  (number, or digits-only string matching `/^[1-9][0-9]{0,14}$/`, safe integers
-  only) and returns a **Number**; UUID strings and every other shape are
-  rejected with `400 "Invalid tournament."`. This unblocks `joinTournament`,
-  `deleteTournament`, and admin `getTournament` / `updateTournament` /
-  `deleteTournament` / `cancelTournament` / results for the deployed bigint ids.
-- `api/_lib/audit.js` stringifies `target_id` (empty → `null`) because the
-  audit-log column is TEXT while tournament targets are bigint.
-- `src/App.jsx` `openTournament()` accepts a numeric id candidate, not just a
-  string, so numeric ids from data navigate the same as string ids.
-- Tests: `tests/helpers.js` `TOURNAMENT_ID` is now the number `4242`; the admin
-  audit assertion expects `String(TOURNAMENT_ID)`; new
-  `tests/tournamentId.test.js` (20 regression tests) covers accepts/rejects
-  (uuid, zero, negatives, floats, `'1e3'`, `'007'`, whitespace, null, objects,
-  unsafe integers, over-long).
-- `docs/DB_REQUIREMENTS.md` notes that described the UUID-only validator as an
-  open gap were updated to record the closure. No SQL was written, edited, or
-  run; `supabase/proposed/` is untouched.
-
-### Verification status (real runs, 2026-10-17)
-
-For R1 on `feat/razorpay-server`:
-
-- `npm run lint` — passed (exit 0).
-- `npm run build` — passed with Vite 5.4.21; 2,182 modules transformed.
-- `npm test` — passed: **11 test files, 286 tests** (245 before; 41 new in
-  `tests/payments.test.js`). The suite deliberately logs mocked failure paths
-  to stderr; process exit was 0.
-
-For the merged bigint fix (`fix/bigint-tournament-ids`, PR #10):
-
-- `npm run lint` — passed (exit 0, eslint reported nothing).
-- `npm run build` — passed with Vite 5.4.21; 2,182 modules transformed.
-- `npm test` — passed: **10 test files, 245 tests** (was 225 before;
-  `tests/tournamentId.test.js` adds 20).
-
-## Feature flags
-
-No flag VALUE was changed on this branch. R1 introduces one new server flag,
-which ships OFF (every payment route answers 503 until the owner explicitly
-sets it). The values below are repository defaults/source behavior, **not a
-claim about uninspected live Vercel/Supabase environment values**:
-
-| Flag | Current repository default / behavior |
-|---|---|
-| `ENABLE_PAYMENTS` | **new (R1)**: `false` unless exactly `true`; when not `true` every payment route answers 503 "Payments are not enabled." |
-| `VITE_FEATURE_PAYMENTS` | `false` unless explicitly set to `true` (stays off until R2 lands and is merged) |
-| `VITE_FEATURE_WALLET_TRANSACTIONS` | enabled unless explicitly set to `false` |
-| `VITE_FEATURE_WALLET_REQUESTS` | `false` unless explicitly set to `true` |
-| `VITE_FEATURE_ROOM_RPC` | `false` unless explicitly set to `true` |
-| `VITE_FEATURE_TOURNAMENT_RESULTS` | enabled unless explicitly set to `false` |
-| `JOIN_USE_RPC` | `false` unless exactly `true` |
-| `ENABLE_WALLET_REQUESTS` | `false` unless exactly `true` |
-| `ENABLE_TOURNAMENT_CANCELLATION` | `false` unless exactly `true` |
-| `ENABLE_TOURNAMENT_RESULTS` | enabled unless explicitly set to `false` |
-
-New server env vars read by R1 (values are NEVER logged or returned):
-`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` (Basic auth to the Razorpay API),
-`RAZORPAY_WEBHOOK_SECRET` (webhook HMAC). They are owner-side Vercel
-environment variables; the owner checklist supplies test-mode values and
-leaves the two payment flags unset until R1+R2 are merged.
-
-## Open items and safety constraints
-
-1. **Razorpay release continues:** R0 (`agent_docs_sync.txt` content was not
-   provided to the agent — pending), R2 (wallet UI, behind
-   `VITE_FEATURE_PAYMENTS`), R3 (hardening/docs/smoke test). The owner
-   checklist (test keys, Vercel env vars, webhook registration) is owner-side
-   and has NOT been assumed done.
-2. **PRs on hold:** the user opens/merges PRs on request only.
-   `feat/razorpay-server` is pushed with NO pull request yet.
-3. ~~**Bigint application compatibility:** `validateTournamentId` currently
-   accepts UUID-format IDs.~~ **Resolved on this branch (2026-10-17):** the
-   validator, audit stringify, client `openTournament`, and all test fixtures
-   are bigint-native now. Remaining UUID-shaped fixtures are intentionally
-   correct: user/profile ids and wallet-request ids stay UUID
-   (`api/admin.js` `RESULT_UUID_RE`, `tests/profile.test.js`,
-   `tests/wallet.test.js`); `tests/playerSide.test.jsx` uses a UUID-style
-   tournament fixture purely as an opaque display value with no format
-   assertion; `tests/api.test.js` uses the label `'not-a-uuid'` for a
-   still-invalid tournament id. No real bugs found beyond the fixed validator.
-2. **SQL is not approved in this workflow:** do not write, run, or edit SQL; do
-   not touch Supabase; do not edit `supabase/proposed/*.sql`.
-3. Proposed **003, 005, and 006** must be rewritten for bigint before they can
-   be applied. `001`, `004`, and `007` also contain direct or indirect
-   UUID-era tournament assumptions and are documented as requiring review.
-4. The proposed RLS, atomic join, room-credential, wallet-request,
-   cancellation/refund, and audit-log migrations remain unapplied. Database
-   functionality must stay behind its existing flags and fail honestly when
-   missing.
-5. Do not change feature-flag values without explicit user approval. Do not
-   merge this branch's PR unless the user explicitly asks.
-6. Keep permanent rules in `replit.md`: no secrets, no client-trusted identity
-   or money values, server-side authorization, no fake payments, and truthful
-   test/build reporting.
-
-## End-of-task protocol
-
-For every future task: update this document with completed work, verification
-results, unchanged flags, and remaining risks; then run the requested checks,
-commit on the task's working branch, push that branch, and stop. Do not merge
-unless explicitly asked.
+## Decisions
+- Existing accounts and data are not edited; new rules apply to everyone the next time they log in or join.
+- Phone numbers are visible to admins only, through the admin API. Players never see another player's phone.
+- Prize amounts in results are records; wallet payouts stay manual until payments are built.

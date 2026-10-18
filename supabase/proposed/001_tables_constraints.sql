@@ -1,5 +1,7 @@
 -- ============================================================================
 -- NOT APPLIED. For the database phase.
+-- OUTDATED - written for uuid ids.
+-- The live database was changed separately; do not apply.
 -- 001_tables_constraints.sql
 -- Tables, columns and constraints the ClashArena code requires.
 -- Idempotent: every step checks its precondition before running.

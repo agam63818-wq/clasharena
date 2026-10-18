@@ -1,5 +1,7 @@
 -- ============================================================================
 -- NOT APPLIED. For the database phase.
+-- OUTDATED - written for uuid ids.
+-- The live database was changed separately; do not apply.
 -- 005_wallet_requests.sql
 -- Deposit / withdraw REQUESTS (no payment gateway): a user asks, an admin
 -- approves or rejects, and ONLY the approve function touches money.

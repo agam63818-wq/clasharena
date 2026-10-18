@@ -23,6 +23,38 @@
 > rejects UUID-shaped values with 400. The audit `target_id` is stringified for
 > its TEXT column. No SQL or feature-flag values were changed.
 
+> ## Docs sync — 2026-10-17 (R0, after the DB phase was applied by Claude)
+> The live database now differs from the [recommended] drafts below in important
+> ways; `docs/PROJECT_STATE.md` is the authoritative record. In particular:
+>
+> - **Room credentials are locked down:** the browser can read `tournaments`
+>   EXCEPT `room_id`/`room_password` (column-level SELECT grant). A browser
+>   `select('*')` on tournaments now **FAILS** (permission denied) — every
+>   tournaments query must list its columns. Players get room credentials only
+>   through the deployed `get_room_details(p_tournament_id bigint)`; admins
+>   read/edit them through `api/admin.js` with the service role.
+> - **Atomic join is DEPLOYED and ENABLED in production**
+>   (`JOIN_USE_RPC=true`): `join_tournament(p_user_id uuid, p_tournament_id
+>   bigint, p_ff_uid text, p_ign text) -> json`, service_role only.
+> - **Payments exist:** `payments` and `payment_webhook_events` tables and the
+>   atomic, idempotent `credit_payment(...)` RPC (service_role only) are
+>   deployed — the ONLY way a payment becomes wallet balance. Razorpay R1
+>   server code is merged; the client (R2) is still pending.
+> - **Not created (do not call):** `wallet_requests` table, wallet
+>   approve/reject RPCs, `cancel_tournament_with_refund` — their drafts are
+>   uuid-era and must be REWRITTEN for bigint first; the matching flags stay
+>   OFF/unset.
+> - **Browser privileges (deployed):** read own profile / registrations /
+>   transactions; UPDATE only `profiles.ff_id`, `nickname`, `avatar_url`;
+>   no inserts/deletes on profiles; no browser writes to tournaments,
+>   match_registrations, transactions. Profile creation at signup happens in
+>   the `handle_new_user` trigger; `block_balance_update` protects
+>   balance/role/level/wins/total_played.
+> - **Migrations `clasharena_phase_a_00 .. _10` were applied by Claude** through
+>   the Supabase connector. The `supabase/proposed/` drafts (003, 005, 006
+>   explicitly; others by review) are OUTDATED (uuid-era) and must not be
+>   applied.
+
 **Source of truth:** the owner-supplied deployed contract above plus application
 code in this repo. Where they disagree, the deployed contract wins. The live
 Supabase project was not inspected in this workspace; this document records what
@@ -187,17 +219,42 @@ Created by `supabase/proposed/007_admin_audit_log.sql`.
 
 The app writes it **best effort**: a missing table never fails an action, but the response carries `auditLogged: false` and the server logs a warning, so the gap is visible instead of implied.
 
+### 1.7 `payments` and `payment_webhook_events` — deployed payments storage (2026-10-17)
+
+`payments` (one row per Razorpay order; the owner may SELECT own rows; ALL
+writes are service-role only):
+
+| Column | Type / contract |
+|---|---|
+| `id` | `uuid` PK |
+| `user_id` | `uuid` — the VERIFIED user, never a client value |
+| `provider` | `'razorpay'` |
+| `provider_order_id` | `text UNIQUE` |
+| `provider_payment_id` | `text UNIQUE`, null until paid |
+| `amount_paise` | `bigint` — whole-rupee amounts only (100..10,000,000 paise), set from Razorpay's own response |
+| `currency` | `'INR'` |
+| `status` | `created` \| `failed` \| `credited` |
+| `failure_reason` | `text`, short, written from `payment.failed` only while `status='created'` |
+| `transaction_id` | `uuid` — the deposit ledger row once credited |
+| `credited_at`, `created_at`, `updated_at` | timestamps |
+
+`payment_webhook_events`: server-only event-id idempotency log; no client
+access. `transactions.reference` holds the Razorpay payment id of a deposit
+row. The contract for these is `docs/PROJECT_STATE.md` (authoritative).
+
 ---
 
 ## 2. Row Level Security
 
 > The Supabase anon key is shipped to every browser (`src/lib/supabaseClient.js:6–7`), so **RLS is the only thing standing between any visitor and full read/write on these tables.** The service-role key used by `api/*` bypasses RLS entirely — every policy below is written for the `anon`/`authenticated` roles.
 
-> ### ⚠️ OPEN DEPENDENCY — signup and profile edits still rely on RLS/trigger protection (DB phase)
-> **The client can no longer be trusted with — and no longer sends — privilege-bearing columns, but the DB is still the only thing that can *refuse* them.** As of 2026-10-13:
-> - **Signup** (`src/App.jsx`, `supabase.auth.signUp` → `profiles` insert) sends only `id`, `username`, `phone`. It no longer sends `role`. `role` and `balance` must therefore come from the **column defaults** (`'user'`, `0` — §1.1) and be enforced by the `protect_profiles_columns()` trigger (§2.1, §3.3): without it, a malicious client can still POST `role = 'admin'` straight to the Supabase REST API with the public anon key, because this insert runs in the browser.
-> - **Profile edits** (`ff_id`, `nickname`, `avatar_url`) are still direct anon-key updates from the browser. RLS cannot restrict columns, so the BEFORE UPDATE trigger must reject changes to `role`, `balance`, `wins`, `level`, `username` for non-service-role sessions.
-> - Until RLS + triggers are applied, **do not treat the app as safe against a crafted client** (docs/AUDIT.md P0-4). Nothing in this phase changes that; it only removes the client's ability to *hand over* a privileged value.
+> ### ✅ RESOLVED 2026-10-17 — the DB phase below was applied by Claude
+> The [recommended] protections described here are now DEPLOYED: signup is
+> handled by the `handle_new_user` trigger (the browser no longer inserts
+> profiles), `block_balance_update` rejects balance/role/level/wins/
+> total_played changes from non-service roles, and profile updates are
+> restricted to `ff_id`, `nickname`, `avatar_url`. The historical warning is
+> kept for context.
 
 ### 2.1 `profiles`
 - **SELECT**: `user_id = auth.uid()` — [required by code] (own profile fetch `App.jsx:352`). Admin read-all — [recommended] only if a feature needs it (none today; the admin "registered players" view reads `profiles(username)` **through** `match_registrations`, see §2.3).
@@ -206,9 +263,15 @@ The app writes it **best effort**: a missing table never fails an action, but th
 - **DELETE**: none for clients — [recommended].
 
 ### 2.2 `tournaments`
-- **SELECT**: all authenticated users — [required by code] (home list `App.jsx:363`, detail, MyMatches `:1403–1417`). **But** `room_id`/`room_password` must not be world-readable: the code's `select('*')` makes this a P0-3 leak today. Recommended shape:
-  - **[recommended]** new table `tournament_room_credentials (tournament_id bigint PK/FK, room_id text, room_password text)` + `security definer` function `get_room_details(p_tournament_id bigint)` returning the row **only** when a `match_registrations` row exists for `auth.uid()`; keep the columns on `tournaments` readable only to admins (column-level privileges or view) until the client stops using `select('*')`.
-  - Minimal (matches current behavior, closes nothing): plain select-all. Not recommended.
+- **SELECT (DEPLOYED, 2026-10-17):** authenticated users may read tournaments
+  **EXCEPT `room_id` and `room_password`** — enforced by a column-level SELECT
+  grant, not a policy. Consequences for code: a browser `select('*')` on
+  tournaments **fails** (permission denied); every client-side tournaments
+  query must list its columns explicitly, and any NEW column needs an explicit
+  `GRANT SELECT (col) ... TO anon, authenticated`. Room credentials reach
+  players only through `get_room_details(p_tournament_id bigint)` (§3.2,
+  deployed) and admins through `api/admin.js` (service role). The historical
+  P0-3 leak (world-readable room columns) is closed at the database level.
 - **INSERT / UPDATE / DELETE**: admin only (role from profile or JWT claim) — [required by code for safety]. Since 2026-10-13 the browser no longer writes tournaments at all: `AdminView.jsx` → `src/lib/apiClient.js` → `api/admin.js` (`createTournament`, `updateTournament`), which re-checks the caller's role from `profiles` with the service-role client and validates every field server-side; `api/deleteTournament.js` does the same for deletes. RLS policies for these paths are therefore **defence in depth**, not the only gate (the service role bypasses RLS). Status values constrained to `('registration','upcoming','live','completed')` — [recommended, matches `api/_lib/validate.js` `TOURNAMENT_STATUSES` and `App.jsx:1166`]; note `'cancelled'` is not a valid value yet (the admin router refuses it with an honest 400 until the refund flow exists).
 
 ### 2.3 `match_registrations`
@@ -233,7 +296,7 @@ The app writes it **best effort**: a missing table never fails an action, but th
 
 ## 3. Functions
 
-### 3.1 `join_tournament(p_user_id uuid, p_tournament_id bigint, p_ff_uid text, p_ign text) returns json` — **[recommended, closes audit P0-1 + P0-6]**
+### 3.1 `join_tournament(p_user_id uuid, p_tournament_id bigint, p_ff_uid text, p_ign text) returns json` — **[DEPLOYED, enabled in production: `JOIN_USE_RPC=true`]**
 
 **Called by:** `api/joinTournament.js` only, on the `JOIN_USE_RPC=true` path, through the **service-role** client.
 **Executed as:** `security definer`, and **EXECUTE granted to `service_role` only** (`revoke all … from public, anon, authenticated`).
@@ -253,7 +316,7 @@ Single transaction:
 6. Insert the `transactions` ledger row and **check it** (`insert` + `if not found then raise`). A ledger failure raises and rolls the whole function back, so money can never move without a ledger row. It is deliberately not swallowed by an exception handler.
 7. Return the same success/error JSON shape the API uses today (`{ success: true }` / `{ error }`, plus `code: '23505'` for duplicates) to keep response shapes backward compatible (permanent rule 5). `api/joinTournament.js` maps the message strings to HTTP statuses.
 
-### 3.2 `get_room_details(p_tournament_id bigint) returns record` — **[recommended, closes P0-3]**
+### 3.2 `get_room_details(p_tournament_id bigint) returns record` — **[DEPLOYED, closes P0-3]**
 
 **Called by:** the **browser** — `src/App.jsx` (`TournamentDetailView`), gated by `VITE_FEATURE_ROOM_RPC` — using the signed-in user's Supabase session through the anon client.
 **Executed as:** `security definer`, **EXECUTE granted to `authenticated`** (revoked from `public`/`anon`).
@@ -311,6 +374,19 @@ never a client-selected admin. The function must validate bigint tournament
 identity and registered players server-side, replace the standings as one
 operation, and mark the tournament completed without making wallet payouts.
 
+### 3.10 `credit_payment(p_provider_order_id text, p_provider_payment_id text, p_amount_paise bigint, p_currency text, p_event_id text default null) -> json` — **[DEPLOYED]**
+
+The ONLY way a payment becomes wallet balance (used by `api/payments.js`
+verify and `api/razorpayWebhook.js`). service_role only. Atomic + idempotent:
+locks the `payments` row by order id; `{ success: true, duplicate: true }` if
+already credited; rejects with `'Unknown order' / 'Currency mismatch' /
+'Amount mismatch' / 'Payment already used' / 'Missing data'` (nothing
+credited); otherwise adds a deposit ledger row (`transactions.reference` =
+Razorpay payment id), increases `profiles.balance`, marks the payment
+`credited`. Callers must use these EXACT parameter names via
+`supabase.rpc('credit_payment', {...})`. `p_event_id` = the webhook's
+`x-razorpay-event-id` header or `'verify:<payment_id>'`.
+
 ---
 
 ## 4. Indexes
@@ -357,7 +433,7 @@ Any DB-phase change must preserve:
 - `POST /api/wallet` responses: `{ success: true, request }` (createWalletRequest), `{ success: true, requests: [...] }` (listWalletRequests), `{ error }` on failures. `503` carries the honest "not enabled" or "requires database setup" message; `429` carries the rate-limit message.
 - `admin_set_tournament_results` RPC: exact deployed signature `p_tournament_id bigint, p_admin_id uuid, p_results jsonb`; JSONB verdict `{ success, error }`. Do not substitute a UUID tournament ID or infer a wallet payout from a recorded prize.
 - `tournaments.status` gains the value `'cancelled'` (001 + 006 §2). Clients must treat it as a terminal state — `src/lib/tournamentStatus.js` already maps it, and the admin edit form refuses transitions out of it.
-- Table/column names and types as listed in §1 (the client uses `select('*')` in several places, so renaming/removing columns breaks the UI).
+- `tournaments` columns: the browser reads tournaments with **explicit column lists** now (`select('*')` fails against the deployed column-level grant, see §2.2) — adding a column needs an explicit grant; removing/renaming one breaks the listed queries.
 - `tournaments.status` values `registration|upcoming|live|completed` and `profiles.role` value `admin` — the UI branches on these literal strings (`App.jsx:395, 536, 1166, 1492`).
 
 ## 7. Proposed (not applied) migrations

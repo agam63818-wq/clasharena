@@ -1,5 +1,7 @@
 -- ============================================================================
 -- NOT APPLIED. For the database phase.
+-- OUTDATED - written for uuid ids.
+-- The live database was changed separately; do not apply.
 -- 006_cancel_tournament_refunds.sql
 -- cancel_tournament_with_refund() — cancelling a tournament that has PAID
 -- registrations, atomically: status + one refund per registration + one

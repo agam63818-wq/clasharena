@@ -1,5 +1,7 @@
 -- ============================================================================
 -- NOT APPLIED. For the database phase.
+-- OUTDATED - written for uuid ids.
+-- The live database was changed separately; do not apply.
 -- 004_room_credentials_split.sql  [recommended, closes AUDIT P0-3]
 -- Moves room_id/room_password into a dedicated table readable by nobody
 -- client-side; participants get them only via get_room_details() (file 003).
